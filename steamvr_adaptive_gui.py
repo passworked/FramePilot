@@ -47,6 +47,7 @@ from PySide6.QtWidgets import (
 from steamvr_core import (
     AdaptiveRuntime,
     HardwareContext,
+    PassiveVrcDataCollector,
     RuntimeConfig,
     StrategyStore,
     calculate_calibration,
@@ -55,7 +56,10 @@ from steamvr_core import (
 )
 
 
-APP_VERSION = "0.6.0"
+APP_VERSION = "0.7.0"
+TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
+ONBOARDING_REVISION = 2
+AUTO_UPLOAD_RETRY_SECONDS = 300
 
 OVERLAY_HOST = "127.0.0.1"
 OVERLAY_PORT = 39421
@@ -83,6 +87,13 @@ DEFAULT_OVERLAY_FIELDS = (
     "decision",
     "vrc_context",
 )
+
+
+def setting_bool(settings: QSettings, key: str, default: bool = False) -> bool:
+    value = settings.value(key, default)
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
 
 def compare_ab_results(results: list[dict[str, object]]) -> dict[str, object] | None:
@@ -161,6 +172,13 @@ ZH_EN = {
     "显示面板": "Show panel",
     "退出": "Exit",
     "参数错误": "Invalid parameters",
+    "匿名负载采集": "Anonymous load collection",
+    "正常游玩时自动采集（仅保存在本机）": "Collect automatically during normal play (local only)",
+    "自动上传尚未上传的匿名记录": "Automatically upload pending anonymous records",
+    "自动过滤加载期并汇总稳定负载与人数变化；不会控制 VRChat。自动上传可在首次使用引导或此处随时取消。": "Filters loading periods and aggregates stable load and population changes without controlling VRChat. Automatic upload can be disabled in the first-use guide or here at any time.",
+    "等待有效采集记录": "Waiting for valid records",
+    "导出共享数据": "Export sharing data",
+    "上传共享数据": "Upload sharing data",
     # Overlay strings intentionally live behind the existing i18n hook. The
     # dogfood build remains Chinese-first while the feature is still moving.
 }
@@ -387,8 +405,8 @@ class OnboardingDialog(QDialog):
         self.main_window = main_window
         self.setWindowTitle("首次使用引导")
         self.setModal(True)
-        self.setMinimumSize(640, 430)
-        self.resize(680, 460)
+        self.setMinimumSize(640, 500)
+        self.resize(680, 540)
         self.setStyleSheet(
             "QDialog{background:#0B1017;}"
             "QLabel#GuideTitle{font-size:25px;font-weight:700;color:#F4F7FB;}"
@@ -497,6 +515,22 @@ class OnboardingDialog(QDialog):
         self.guide_summary.setObjectName("GuideCard")
         self.guide_summary.setWordWrap(True)
         layout.addWidget(self.guide_summary)
+        self.guide_auto_upload = QCheckBox("自动上传匿名采集数据（推荐）")
+        self.guide_auto_upload.setChecked(
+            setting_bool(self.main_window.settings, "collection/auto_upload", True)
+            if self.main_window.settings.contains("collection/auto_upload")
+            else True
+        )
+        self.guide_auto_upload.toggled.connect(self._refresh_summary)
+        layout.addWidget(self.guide_auto_upload)
+        upload_hint = QLabel(
+            "勾选后，现有及以后生成的尚未上传聚合记录会自动增量上传；可随时取消。"
+            "包含世界 ID、人数范围、硬件型号、渲染设置和聚合性能指标；"
+            "不包含玩家身份、实例 ID、机器名或硬件指纹。"
+        )
+        upload_hint.setObjectName("Muted")
+        upload_hint.setWordWrap(True)
+        layout.addWidget(upload_hint)
         safety = QLabel("确认数据正常后，再从主面板解锁 SteamVR 设置写入。")
         safety.setObjectName("Muted")
         safety.setWordWrap(True)
@@ -512,12 +546,17 @@ class OnboardingDialog(QDialog):
         self.back_button.setVisible(index > 0)
         self.next_button.setText("开始使用" if index == 2 else "下一步")
         if index == 2:
-            self.guide_summary.setText(
-                "✓ 串流画质：已确认最高档<br><br>"
-                f"✓ 目标帧率：{self.guide_target_combo.currentText()}<br><br>"
-                "✓ 初始状态：只读监控"
-            )
+            self._refresh_summary()
         self._update_next_enabled()
+
+    def _refresh_summary(self) -> None:
+        upload_text = "自动增量上传" if self.guide_auto_upload.isChecked() else "仅保存在本机"
+        self.guide_summary.setText(
+            "✓ 串流画质：已确认最高档<br><br>"
+            f"✓ 目标帧率：{self.guide_target_combo.currentText()}<br><br>"
+            f"✓ 匿名采集数据：{upload_text}<br><br>"
+            "✓ 初始状态：只读监控"
+        )
 
     def previous_page(self) -> None:
         self.pages.setCurrentIndex(max(0, self.pages.currentIndex() - 1))
@@ -533,11 +572,15 @@ class OnboardingDialog(QDialog):
         target_index = self.main_window.target_fps_combo.findData(divisor)
         if target_index >= 0:
             self.main_window.target_fps_combo.setCurrentIndex(target_index)
+        self.main_window.set_auto_upload_enabled(self.guide_auto_upload.isChecked())
         self.main_window.settings.setValue("onboarding/completed", True)
-        self.main_window.settings.setValue("onboarding/revision", 1)
+        self.main_window.settings.setValue("onboarding/revision", ONBOARDING_REVISION)
         self.main_window.settings.sync()
         self.main_window.apply_config()
-        self.main_window.append_event("success", f"首次使用引导完成 · 目标刷新率 1/{divisor}")
+        upload_text = "自动上传已启用" if self.guide_auto_upload.isChecked() else "仅本地采集"
+        self.main_window.append_event(
+            "success", f"首次使用引导完成 · 目标刷新率 1/{divisor} · {upload_text}"
+        )
         self.accept()
 
 
@@ -550,9 +593,12 @@ class MonitorWorker(QObject):
     calibration_finished = Signal(dict)
     experiment_progress = Signal(dict)
     experiment_finished = Signal(dict)
+    collection_status = Signal(dict)
+    collection_exported = Signal(dict)
+    collection_uploaded = Signal(dict)
     finished = Signal()
 
-    def __init__(self, log_dir: Path) -> None:
+    def __init__(self, log_dir: Path, collection_enabled: bool = True) -> None:
         super().__init__()
         self.log_dir = log_dir
         self.commands: queue.Queue[tuple[str, object]] = queue.Queue()
@@ -560,6 +606,12 @@ class MonitorWorker(QObject):
         self.runtime: AdaptiveRuntime | None = None
         local_root = Path(os.environ.get("LOCALAPPDATA", str(executable_dir()))) / "SteamVRAdaptiveResolution"
         self.strategy_store = StrategyStore(local_root / "strategy-store.json")
+        self.passive_collector = PassiveVrcDataCollector(
+            local_root / "shared-telemetry", enabled=collection_enabled
+        )
+        self._last_collection_status_at = -1e9
+        self._collection_upload_active = False
+        self._collection_upload_lock = threading.Lock()
         self.calibration: dict[str, object] | None = None
         self.experiment: dict[str, object] | None = None
         self.experiment_results: list[dict[str, object]] = []
@@ -578,6 +630,15 @@ class MonitorWorker(QObject):
 
     def submit_restore(self) -> None:
         self.commands.put(("restore", None))
+
+    def submit_collection_enabled(self, enabled: bool) -> None:
+        self.commands.put(("collection_enabled", bool(enabled)))
+
+    def submit_collection_export(self, path: Path) -> None:
+        self.commands.put(("collection_export", path))
+
+    def submit_collection_upload(self, automatic: bool = False) -> None:
+        self.commands.put(("collection_upload", bool(automatic)))
 
     def submit_overlay_settings(self, fields: list[str], anchor: str, size_pct: int) -> None:
         self.commands.put(
@@ -618,6 +679,31 @@ class MonitorWorker(QObject):
                     self.runtime.manual_set_scale(int(payload))
                 elif command == "restore":
                     self.runtime.restore_current()
+                elif command == "collection_enabled":
+                    self.passive_collector.set_enabled(bool(payload))
+                    self.collection_status.emit(self.passive_collector.status())
+                elif command == "collection_export":
+                    exported_path = self.passive_collector.export_share_package(Path(payload))
+                    self.collection_exported.emit(
+                        {"ok": True, "path": str(exported_path)}
+                    )
+                elif command == "collection_upload":
+                    automatic = bool(payload)
+                    with self._collection_upload_lock:
+                        if self._collection_upload_active:
+                            raise RuntimeError("共享数据正在上传")
+                        self._collection_upload_active = True
+                    try:
+                        threading.Thread(
+                            target=self._run_collection_upload,
+                            args=(automatic,),
+                            name="framepilot-telemetry-upload",
+                            daemon=True,
+                        ).start()
+                    except Exception:
+                        with self._collection_upload_lock:
+                            self._collection_upload_active = False
+                        raise
                 elif command == "overlay_settings":
                     allowed = {field for field, _label in OVERLAY_FIELD_OPTIONS}
                     options = payload if isinstance(payload, dict) else {}
@@ -643,6 +729,27 @@ class MonitorWorker(QObject):
                     )
                 elif command == "experiment":
                     self.experiment_finished.emit({"error": str(exc)})
+                elif command == "collection_export":
+                    self.collection_exported.emit({"ok": False, "error": str(exc)})
+                elif command == "collection_upload":
+                    self.collection_uploaded.emit(
+                        {
+                            "ok": False,
+                            "error": str(exc),
+                            "automatic": bool(payload),
+                        }
+                    )
+
+    def _run_collection_upload(self, automatic: bool) -> None:
+        try:
+            result = self.passive_collector.upload_pending(TELEMETRY_UPLOAD_ENDPOINT)
+        except Exception as exc:
+            result = {"ok": False, "error": str(exc)}
+        finally:
+            with self._collection_upload_lock:
+                self._collection_upload_active = False
+        result["automatic"] = automatic
+        self.collection_uploaded.emit(result)
 
     def _start_experiment(self, variant: str) -> None:
         assert self.runtime is not None
@@ -887,6 +994,7 @@ class MonitorWorker(QObject):
         writer = None
         self.runtime = AdaptiveRuntime(RuntimeConfig(restore_on_exit=True))
         self.event.emit("info", f"日志已创建: {log_path.name}")
+        self.collection_status.emit(self.passive_collector.status())
         last_connection_message = ""
         try:
             while not self.stop_event.is_set():
@@ -914,6 +1022,14 @@ class MonitorWorker(QObject):
                         self._last_snapshot = result
                         self._process_calibration(result)
                         self._process_experiment(result)
+                        context = self.runtime.hardware()
+                        collection_changed = self.passive_collector.observe(
+                            result, context, time.monotonic()
+                        )
+                        now = time.monotonic()
+                        if collection_changed or now - self._last_collection_status_at >= 5.0:
+                            self._last_collection_status_at = now
+                            self.collection_status.emit(self.passive_collector.status())
                         data = result.as_dict()
                         active_experiment = self.experiment
                         data.update(
@@ -964,7 +1080,17 @@ class MainWindow(QMainWindow):
         self.setMinimumSize(1060, 700)
         self.setWindowIcon(make_icon())
         self.last_snapshot: dict[str, object] = {}
+        self.last_collection_status: dict[str, object] = {}
+        self._collection_uploading = False
+        self._collection_upload_is_automatic = False
+        self._auto_upload_last_attempted_records = 0
         self.settings = QSettings("OpenAI-Codex", "SteamVRAdaptiveResolution")
+        self._auto_upload_retry_timer = QTimer(self)
+        self._auto_upload_retry_timer.setSingleShot(True)
+        self._auto_upload_retry_timer.setInterval(AUTO_UPLOAD_RETRY_SECONDS * 1000)
+        self._auto_upload_retry_timer.timeout.connect(
+            lambda: self._maybe_auto_upload(force=True)
+        )
         saved_language = str(self.settings.value("language", "zh"))
         self.language = language_override or (saved_language if saved_language in {"zh", "en"} else "zh")
         self.advanced_mode = str(self.settings.value("advanced_mode", "false")).lower() == "true"
@@ -1125,6 +1251,49 @@ class MainWindow(QMainWindow):
         mode_layout.addWidget(self.arm_check)
         controls_layout.addWidget(self.mode_group)
 
+        self.collection_group = QGroupBox("匿名负载采集")
+        collection_layout = QVBoxLayout(self.collection_group)
+        self.collection_enabled_check = QCheckBox("正常游玩时自动采集（仅保存在本机）")
+        collection_setting = self.settings.value("collection/enabled", True)
+        collection_enabled = (
+            collection_setting
+            if isinstance(collection_setting, bool)
+            else str(collection_setting).strip().lower() in {"1", "true", "yes", "on"}
+        )
+        self.collection_enabled_check.setChecked(collection_enabled)
+        self.collection_enabled_check.toggled.connect(self.collection_enabled_changed)
+        collection_layout.addWidget(self.collection_enabled_check)
+        self.collection_auto_upload_check = QCheckBox("自动上传尚未上传的匿名记录")
+        self.collection_auto_upload_check.setChecked(
+            setting_bool(self.settings, "collection/auto_upload", False)
+        )
+        self.collection_auto_upload_check.toggled.connect(
+            self.auto_upload_enabled_changed
+        )
+        collection_layout.addWidget(self.collection_auto_upload_check)
+        collection_hint = QLabel(
+            "自动过滤加载期并汇总稳定负载与人数变化；不会控制 VRChat。"
+            "自动上传可在首次使用引导或此处随时取消。"
+        )
+        collection_hint.setWordWrap(True)
+        collection_hint.setObjectName("Muted")
+        collection_layout.addWidget(collection_hint)
+        self.collection_status_label = QLabel("等待有效采集记录")
+        self.collection_status_label.setWordWrap(True)
+        self.collection_status_label.setObjectName("Muted")
+        collection_layout.addWidget(self.collection_status_label)
+        self.collection_export_button = QPushButton("导出共享数据")
+        self.collection_export_button.clicked.connect(self.export_collection)
+        self.collection_export_button.setEnabled(False)
+        self.collection_upload_button = QPushButton("上传共享数据")
+        self.collection_upload_button.clicked.connect(self.upload_collection)
+        self.collection_upload_button.setEnabled(False)
+        collection_buttons = QHBoxLayout()
+        collection_buttons.addWidget(self.collection_export_button)
+        collection_buttons.addWidget(self.collection_upload_button)
+        collection_layout.addLayout(collection_buttons)
+        controls_layout.addWidget(self.collection_group)
+
         self.overlay_group = QGroupBox("VR 参数叠加层")
         overlay_layout = QVBoxLayout(self.overlay_group)
         self.overlay_enabled_check = QCheckBox("在头显中显示参数")
@@ -1266,7 +1435,9 @@ class MainWindow(QMainWindow):
 
     def _start_worker(self) -> None:
         self.thread = QThread(self)
-        self.worker = MonitorWorker(executable_dir() / "logs")
+        self.worker = MonitorWorker(
+            executable_dir() / "logs", self.collection_enabled_check.isChecked()
+        )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
         self.worker.snapshot.connect(self.update_snapshot)
@@ -1274,6 +1445,9 @@ class MainWindow(QMainWindow):
         self.worker.connection.connect(self.update_connection)
         self.worker.experiment_progress.connect(self.update_experiment_progress)
         self.worker.experiment_finished.connect(self.experiment_complete)
+        self.worker.collection_status.connect(self.update_collection_status)
+        self.worker.collection_exported.connect(self.collection_export_complete)
+        self.worker.collection_uploaded.connect(self.collection_upload_complete)
         self.worker.finished.connect(self.thread.quit)
         self.thread.start()
         QTimer.singleShot(200, self.apply_config)
@@ -1346,6 +1520,223 @@ class MainWindow(QMainWindow):
         self.settings.sync()
         self._sync_overlay_process()
         self._send_overlay_settings()
+
+    def collection_enabled_changed(self, enabled: bool) -> None:
+        self.settings.setValue("collection/enabled", bool(enabled))
+        self.settings.sync()
+        if hasattr(self, "worker"):
+            self.worker.submit_collection_enabled(enabled)
+
+    def set_auto_upload_enabled(self, enabled: bool) -> None:
+        self.collection_auto_upload_check.blockSignals(True)
+        self.collection_auto_upload_check.setChecked(bool(enabled))
+        self.collection_auto_upload_check.blockSignals(False)
+        self.auto_upload_enabled_changed(bool(enabled))
+
+    def auto_upload_enabled_changed(self, enabled: bool) -> None:
+        self.settings.setValue("collection/auto_upload", bool(enabled))
+        self.settings.sync()
+        if not enabled:
+            self._auto_upload_retry_timer.stop()
+            return
+        self._auto_upload_last_attempted_records = 0
+        QTimer.singleShot(0, self._maybe_auto_upload)
+
+    def update_collection_status(self, data: dict) -> None:
+        self.last_collection_status = dict(data)
+        enabled = bool(data.get("enabled", False))
+        worlds = int(data.get("worlds", 0))
+        contexts = int(data.get("contexts", 0))
+        steady = int(data.get("steady_records", 0))
+        transitions = int(data.get("transition_records", 0))
+        size_kib = float(data.get("storage_bytes", 0)) / 1024.0
+        if self.language == "en":
+            prefix = "Collecting" if enabled else "Paused"
+            text = (
+                f"{prefix} · {worlds}/30 worlds · {contexts} world/population contexts\n"
+                f"{steady} steady windows · {transitions} population transitions · {size_kib:.1f} KiB"
+            )
+        else:
+            prefix = "采集中" if enabled else "已暂停"
+            text = (
+                f"{prefix} · 世界 {worlds}/30 · 世界/人数场景 {contexts}\n"
+                f"稳定窗口 {steady} · 人数变化 {transitions} · {size_kib:.1f} KiB"
+            )
+        self.collection_status_label.setText(text)
+        has_records = int(data.get("records", 0)) > 0
+        self.collection_export_button.setEnabled(has_records)
+        self.collection_upload_button.setEnabled(
+            has_records and not self._collection_uploading
+        )
+        records_path = str(data.get("records_path", ""))
+        self.collection_status_label.setToolTip(records_path)
+        self._maybe_auto_upload()
+
+    def _maybe_auto_upload(self, force: bool = False) -> None:
+        if (
+            not self.collection_auto_upload_check.isChecked()
+            or self._collection_uploading
+            or not hasattr(self, "worker")
+        ):
+            return
+        records = int(self.last_collection_status.get("records", 0))
+        if records <= 0:
+            return
+        if not force and records <= self._auto_upload_last_attempted_records:
+            return
+        self._auto_upload_last_attempted_records = max(
+            self._auto_upload_last_attempted_records, records
+        )
+        self._begin_collection_upload(automatic=True)
+
+    def export_collection(self) -> None:
+        path_text, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export sharing data" if self.language == "en" else "导出匿名共享数据",
+            str(Path.home() / "framepilot-vr-shared-data.zip"),
+            "ZIP archive (*.zip)" if self.language == "en" else "ZIP 压缩包 (*.zip)",
+        )
+        if not path_text:
+            return
+        path = Path(path_text)
+        if path.suffix.lower() != ".zip":
+            path = path.with_suffix(".zip")
+        self.collection_export_button.setEnabled(False)
+        self.worker.submit_collection_export(path)
+
+    def collection_export_complete(self, data: dict) -> None:
+        self.collection_export_button.setEnabled(
+            int(self.last_collection_status.get("records", 0)) > 0
+        )
+        if not bool(data.get("ok", False)):
+            QMessageBox.warning(
+                self,
+                "Export failed" if self.language == "en" else "导出失败",
+                str(data.get("error", "Unknown error")),
+            )
+            return
+        path = str(data.get("path", ""))
+        self.append_event("success", f"匿名共享数据已导出: {path}")
+        QMessageBox.information(
+            self,
+            "Export complete" if self.language == "en" else "导出完成",
+            (
+                f"Upload-ready archive saved to:\n{path}\n\nNo player identity, instance ID, machine name, or hardware fingerprint is included."
+                if self.language == "en"
+                else f"可供后期上传的压缩包已保存到：\n{path}\n\n其中不包含玩家身份、实例 ID、机器名或硬件指纹。"
+            ),
+        )
+
+    def upload_collection(self) -> None:
+        if self._collection_uploading:
+            return
+        if self.language == "en":
+            title = "Upload sharing data"
+            message = (
+                "Upload all new local records to the FramePilot sharing service?\n\n"
+                "Included: world ID, population ranges and changes, GPU/HMD model, "
+                "GPU VRAM, CPU model and core/thread counts, system RAM, render "
+                "settings, and aggregated performance metrics.\n\n"
+                "Excluded: player identity, VRChat instance ID, machine name, and "
+                "hardware fingerprint. Uploading happens only after this confirmation."
+            )
+        else:
+            title = "上传共享数据"
+            message = (
+                "是否把尚未上传的本地记录发送到 FramePilot 共享服务？\n\n"
+                "包含：世界 ID、人数区间与变化、GPU/HMD 型号、GPU 显存、"
+                "CPU 型号与核心/线程数、系统内存、渲染设置和聚合性能指标。\n\n"
+                "不包含：玩家身份、VRChat 实例 ID、机器名或硬件指纹。"
+                "只有本次确认后才会上传。"
+            )
+        answer = QMessageBox.question(
+            self,
+            title,
+            message,
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer != QMessageBox.StandardButton.Yes:
+            return
+        self._begin_collection_upload(automatic=False)
+
+    def _begin_collection_upload(self, automatic: bool) -> None:
+        if self._collection_uploading:
+            return
+        self._collection_uploading = True
+        self._collection_upload_is_automatic = automatic
+        self.collection_upload_button.setEnabled(False)
+        self.collection_upload_button.setText(
+            "Uploading…" if self.language == "en" else "正在上传…"
+        )
+        self.append_event(
+            "info",
+            "开始自动上传新增匿名记录" if automatic else "开始上传匿名共享数据",
+        )
+        self.worker.submit_collection_upload(automatic=automatic)
+
+    def collection_upload_complete(self, data: dict) -> None:
+        automatic = bool(
+            data.get("automatic", self._collection_upload_is_automatic)
+        )
+        self._collection_uploading = False
+        self._collection_upload_is_automatic = False
+        self.collection_upload_button.setText(self.tr("上传共享数据"))
+        self.collection_upload_button.setEnabled(
+            int(self.last_collection_status.get("records", 0)) > 0
+        )
+        if not bool(data.get("ok", False)):
+            error = str(data.get("error", "Unknown error"))
+            self.append_event("error", f"匿名共享数据上传失败: {error}")
+            if automatic:
+                if self.collection_auto_upload_check.isChecked():
+                    self._auto_upload_retry_timer.start()
+                return
+            QMessageBox.warning(
+                self,
+                "Upload failed" if self.language == "en" else "上传失败",
+                error,
+            )
+            return
+        batches = int(data.get("batches", 0))
+        accepted = int(data.get("accepted_records", 0))
+        duplicates = int(data.get("duplicate_records", 0))
+        has_more = bool(data.get("has_more", False))
+        self._auto_upload_retry_timer.stop()
+        if batches == 0:
+            detail = (
+                "No new records need uploading."
+                if self.language == "en"
+                else "没有需要上传的新记录。"
+            )
+        elif self.language == "en":
+            detail = (
+                f"Upload complete: {accepted} accepted, {duplicates} duplicate "
+                f"record(s), across {batches} batch(es)."
+            )
+        else:
+            detail = (
+                f"上传完成：服务器接收 {accepted} 条，重复 {duplicates} 条，"
+                f"共 {batches} 个批次。"
+            )
+        if has_more:
+            detail += (
+                "\nSome records remain; click Upload again to continue."
+                if self.language == "en"
+                else "\n仍有记录未上传，请再次点击“上传共享数据”继续。"
+            )
+        self.append_event("success", detail.replace("\n", " "))
+        if automatic:
+            if has_more and self.collection_auto_upload_check.isChecked():
+                QTimer.singleShot(
+                    1000, lambda: self._maybe_auto_upload(force=True)
+                )
+            return
+        QMessageBox.information(
+            self,
+            "Upload complete" if self.language == "en" else "上传完成",
+            detail,
+        )
 
     def _set_overlay_status(self, state: str, detail: str = "") -> None:
         labels = {
@@ -1448,9 +1839,12 @@ class MainWindow(QMainWindow):
         self.tray.show()
 
     def maybe_show_onboarding(self) -> None:
-        value = self.settings.value("onboarding/completed", False)
-        completed = value if isinstance(value, bool) else str(value).strip().lower() in {"1", "true", "yes", "on"}
-        if not completed:
+        completed = setting_bool(self.settings, "onboarding/completed", False)
+        try:
+            revision = int(self.settings.value("onboarding/revision", 0))
+        except (TypeError, ValueError):
+            revision = 0
+        if not completed or revision < ONBOARDING_REVISION:
             self.show_onboarding(force=False)
 
     def show_onboarding(self, force: bool = False) -> None:
@@ -1622,6 +2016,8 @@ class MainWindow(QMainWindow):
         self.chart.update()
         if self.last_snapshot:
             self.update_snapshot(self.last_snapshot)
+        if self.last_collection_status:
+            self.update_collection_status(self.last_collection_status)
         self.update_connection(*self.connection_state)
         if announce:
             message = "Language switched to English" if self.language == "en" else "语言已切换为中文"

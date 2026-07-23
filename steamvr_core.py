@@ -14,6 +14,7 @@ import subprocess
 import sys
 import tempfile
 import time
+import zipfile
 from collections import deque
 from dataclasses import dataclass, replace
 
@@ -21,6 +22,7 @@ import psutil
 import openvr
 
 from vrc_context import (
+    PassiveVrcDataCollector,
     VrcContextSnapshot,
     VrcLogContextProvider,
     VrcResolutionProfileStore,
@@ -199,6 +201,12 @@ class HardwareContext:
     refresh_hz: float
     render_width: int
     render_height: int
+    cpu_name: str = "Unknown CPU"
+    cpu_physical_cores: int = 0
+    cpu_logical_cores: int = 0
+    system_ram_mib: int = 0
+    gpu_vram_mib: int = 0
+    gpu_count: int = 0
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -210,6 +218,12 @@ class HardwareContext:
             "refresh_hz": self.refresh_hz,
             "render_width": self.render_width,
             "render_height": self.render_height,
+            "cpu_name": self.cpu_name,
+            "cpu_physical_cores": self.cpu_physical_cores,
+            "cpu_logical_cores": self.cpu_logical_cores,
+            "system_ram_mib": self.system_ram_mib,
+            "gpu_vram_mib": self.gpu_vram_mib,
+            "gpu_count": self.gpu_count,
         }
 
 
@@ -367,6 +381,10 @@ class TelemetrySnapshot:
     vrc_population_bucket: str
     vrc_context_ready: bool
     vrc_recent_joins: int
+    vrc_recent_leaves: int
+    vrc_population_delta_10s: int
+    vrc_population_delta_60s: int
+    vrc_seconds_since_population_change: float
     vrc_profile_safe_scale: int
     vrc_profile_unsafe_scale: int
     vrc_profile_samples: int
@@ -420,6 +438,10 @@ class TelemetrySnapshot:
             "vrc_population_bucket": self.vrc_population_bucket,
             "vrc_context_ready": self.vrc_context_ready,
             "vrc_recent_joins": self.vrc_recent_joins,
+            "vrc_recent_leaves": self.vrc_recent_leaves,
+            "vrc_population_delta_10s": self.vrc_population_delta_10s,
+            "vrc_population_delta_60s": self.vrc_population_delta_60s,
+            "vrc_seconds_since_population_change": self.vrc_seconds_since_population_change,
             "vrc_profile_safe_scale": self.vrc_profile_safe_scale,
             "vrc_profile_unsafe_scale": self.vrc_profile_unsafe_scale,
             "vrc_profile_samples": self.vrc_profile_samples,
@@ -581,6 +603,8 @@ class GpuUtilizationSampler:
         self.last_value: float | None = None
         self.last_sample_at = 0.0
         self._gpu_name: str | None = None
+        self._gpu_vram_mib: int | None = None
+        self._gpu_count: int | None = None
 
     @staticmethod
     def _find_nvidia_smi() -> str | None:
@@ -616,7 +640,14 @@ class GpuUtilizationSampler:
         if self._gpu_name is not None:
             return self._gpu_name
         if not self.nvidia_smi:
-            self._gpu_name = "Unknown GPU"
+            controllers = self._windows_video_controllers()
+            names = [
+                str(item.get("Name", "")).strip()
+                for item in controllers
+                if str(item.get("Name", "")).strip()
+            ]
+            self._gpu_name = " + ".join(names) if names else "Unknown GPU"
+            self._gpu_count = len(names)
             return self._gpu_name
         try:
             completed = subprocess.run(
@@ -629,9 +660,117 @@ class GpuUtilizationSampler:
             )
             names = [line.strip() for line in completed.stdout.splitlines() if line.strip()]
             self._gpu_name = " + ".join(names) if names else "Unknown GPU"
+            self._gpu_count = len(names)
         except (OSError, subprocess.SubprocessError):
             self._gpu_name = "Unknown GPU"
         return self._gpu_name
+
+    @staticmethod
+    def _windows_video_controllers() -> list[dict[str, object]]:
+        if os.name != "nt":
+            return []
+        powershell = shutil.which("powershell.exe")
+        if not powershell:
+            return []
+        try:
+            completed = subprocess.run(
+                [
+                    powershell,
+                    "-NoProfile",
+                    "-NonInteractive",
+                    "-Command",
+                    (
+                        "Get-CimInstance Win32_VideoController | "
+                        "Select-Object Name,AdapterRAM | ConvertTo-Json -Compress"
+                    ),
+                ],
+                capture_output=True,
+                text=True,
+                timeout=4.0,
+                check=True,
+                creationflags=CREATE_NO_WINDOW,
+            )
+            parsed = json.loads(completed.stdout)
+        except (OSError, ValueError, subprocess.SubprocessError):
+            return []
+        if isinstance(parsed, dict):
+            return [parsed]
+        return [item for item in parsed if isinstance(item, dict)] if isinstance(parsed, list) else []
+
+    def gpu_vram_mib(self) -> int:
+        if self._gpu_vram_mib is not None:
+            return self._gpu_vram_mib
+        values: list[int] = []
+        if self.nvidia_smi:
+            try:
+                completed = subprocess.run(
+                    [
+                        self.nvidia_smi,
+                        "--query-gpu=memory.total",
+                        "--format=csv,noheader,nounits",
+                    ],
+                    capture_output=True,
+                    text=True,
+                    timeout=2.0,
+                    check=True,
+                    creationflags=CREATE_NO_WINDOW,
+                )
+                values = [
+                    int(float(line.strip()))
+                    for line in completed.stdout.splitlines()
+                    if line.strip()
+                ]
+            except (OSError, ValueError, subprocess.SubprocessError):
+                values = []
+        if not values:
+            controllers = self._windows_video_controllers()
+            for item in controllers:
+                try:
+                    memory_bytes = int(item.get("AdapterRAM", 0) or 0)
+                except (TypeError, ValueError):
+                    continue
+                if memory_bytes > 0:
+                    values.append(round(memory_bytes / (1024 * 1024)))
+            if self._gpu_count is None:
+                self._gpu_count = len(controllers)
+        self._gpu_vram_mib = max(values, default=0)
+        return self._gpu_vram_mib
+
+    def gpu_count(self) -> int:
+        if self._gpu_count is None:
+            self.gpu_name()
+        return max(0, int(self._gpu_count or 0))
+
+
+def system_cpu_name() -> str:
+    if os.name == "nt":
+        try:
+            import winreg
+
+            with winreg.OpenKey(
+                winreg.HKEY_LOCAL_MACHINE,
+                r"HARDWARE\DESCRIPTION\System\CentralProcessor\0",
+            ) as key:
+                value, _value_type = winreg.QueryValueEx(key, "ProcessorNameString")
+            name = " ".join(str(value).split())
+            if name:
+                return name
+        except (OSError, ImportError):
+            pass
+    return (
+        " ".join((platform.processor() or "").split())
+        or " ".join(os.environ.get("PROCESSOR_IDENTIFIER", "").split())
+        or "Unknown CPU"
+    )
+
+
+def system_hardware_details() -> dict[str, object]:
+    return {
+        "cpu_name": system_cpu_name(),
+        "cpu_physical_cores": int(psutil.cpu_count(logical=False) or 0),
+        "cpu_logical_cores": int(psutil.cpu_count(logical=True) or 0),
+        "system_ram_mib": round(psutil.virtual_memory().total / (1024 * 1024)),
+    }
 
 
 class SteamVRSession:
@@ -849,7 +988,18 @@ class AdaptiveRuntime:
         digest = hashlib.sha256(
             json.dumps(identity, ensure_ascii=True, sort_keys=True).encode("utf-8")
         ).hexdigest()[:16]
-        self.hardware_context = HardwareContext(hardware_id=digest, **identity)
+        details = system_hardware_details()
+        details.update(
+            {
+                "gpu_vram_mib": self.gpu_sampler.gpu_vram_mib(),
+                "gpu_count": self.gpu_sampler.gpu_count(),
+            }
+        )
+        self.hardware_context = HardwareContext(
+            hardware_id=digest,
+            **identity,
+            **details,
+        )
         self.emit("success", f"已连接 SteamVR · {refresh:.1f} Hz · 推荐目标 {width}×{height}")
         self.emit("info", f"硬件配置 {model} · {self.gpu_sampler.gpu_name()} · ID {digest}")
 
@@ -1355,6 +1505,10 @@ class AdaptiveRuntime:
             vrc_population_bucket=self.vrc_context.population_bucket,
             vrc_context_ready=self.vrc_context.ready,
             vrc_recent_joins=self.vrc_context.recent_joins,
+            vrc_recent_leaves=self.vrc_context.recent_leaves,
+            vrc_population_delta_10s=self.vrc_context.population_delta_10s,
+            vrc_population_delta_60s=self.vrc_context.population_delta_60s,
+            vrc_seconds_since_population_change=self.vrc_context.seconds_since_population_change,
             vrc_profile_safe_scale=int(vrc_profile.get("safe_scale", 0)) if vrc_profile else 0,
             vrc_profile_unsafe_scale=int(vrc_profile.get("unsafe_scale", 0)) if vrc_profile else 0,
             vrc_profile_samples=int(vrc_profile.get("samples", 0)) if vrc_profile else 0,
@@ -1612,6 +1766,8 @@ def run_self_test() -> int:
             output.write("[Behaviour] OnPlayerJoined later-user\n")
         updated_context = provider.poll(103.0)
         assert updated_context.population == 3 and not updated_context.ready
+        assert updated_context.recent_leaves == 1
+        assert updated_context.population_delta_60s == 3
 
         profile_path = temporary_root / "profiles.json"
         profile_store = VrcResolutionProfileStore(profile_path)
@@ -1685,6 +1841,95 @@ def run_self_test() -> int:
         )
         assert capped_profile_decision.proposed_scale == 139
 
+        collector = PassiveVrcDataCollector(
+            temporary_root / "shared",
+            sample_interval_seconds=0.1,
+            world_warmup_seconds=0.0,
+            steady_quiet_seconds=0.0,
+            steady_window_seconds=2.0,
+            transition_pre_seconds=2.0,
+            transition_post_seconds=2.0,
+        )
+        hardware = {
+            "machine_name": "must-not-export",
+            "hardware_id": "must-not-export",
+            "gpu_name": "test-gpu",
+            "gpu_vram_mib": 12288,
+            "gpu_count": 1,
+            "cpu_name": "test-cpu",
+            "cpu_physical_cores": 8,
+            "cpu_logical_cores": 16,
+            "system_ram_mib": 32768,
+            "hmd_manufacturer": "test-maker",
+            "hmd_model": "test-hmd",
+        }
+
+        def passive_sample(population: int, quiet: float) -> dict[str, object]:
+            return {
+                "app_key": "steam.app.438100",
+                "vrc_world_id": "wrld_11111111-1111-1111-1111-111111111111",
+                "vrc_population": population,
+                "vrc_population_bucket": "1-5",
+                "vrc_context_ready": True,
+                "vrc_seconds_since_population_change": quiet,
+                "refresh_hz": 90.0,
+                "target_divisor": 2,
+                "target_fps": 45.0,
+                "budget_ms": 1000.0 / 45.0,
+                "render_width": 2000,
+                "render_height": 2000,
+                "resolution_scale": 100,
+                "gpu_p50_ms": 7.0,
+                "gpu_p95_ms": 8.0,
+                "cpu_p95_ms": 6.0,
+                "frame_interval_p95_ms": 22.0,
+                "reprojection_pct": 0.0,
+                "dropped": 0,
+                "mispresented": 0,
+                "system_cpu_pct": 25.0,
+                "system_gpu_pct": 70.0,
+            }
+
+        for tick in range(5):
+            collector.observe(passive_sample(3, 30.0), hardware, tick * 0.5)
+        assert collector.status()["steady_records"] == 1
+        for tick in range(5, 10):
+            population = 4
+            collector.observe(
+                passive_sample(population, max(0.0, (tick - 5) * 0.5)),
+                hardware,
+                tick * 0.5,
+            )
+        assert collector.status()["transition_records"] == 1
+        exported_path = collector.export_share_package(temporary_root / "share.zip")
+        assert exported_path.exists()
+        with zipfile.ZipFile(exported_path) as archive:
+            records_payload = archive.read("records.jsonl").decode("utf-8")
+            assert "must-not-export" not in records_payload
+            assert "population_transition" in records_payload
+            assert '"cpu_name":"test-cpu"' in records_payload
+            assert '"gpu_vram_mib":12288' in records_payload
+            assert '"system_ram_mib":32768' in records_payload
+        upload_calls: list[tuple[str, int]] = []
+
+        def fake_upload(endpoint: str, lines: list[bytes]) -> dict[str, object]:
+            upload_calls.append((endpoint, len(lines)))
+            return {
+                "ok": True,
+                "batch_id": f"batch-{len(upload_calls)}",
+                "accepted_records": len(lines),
+                "duplicate_records": 0,
+            }
+
+        collector._upload_archive = fake_upload  # type: ignore[method-assign]
+        first_upload = collector.upload_pending("https://example.invalid/")
+        assert first_upload["batches"] == 1
+        assert first_upload["accepted_records"] == 2
+        assert upload_calls == [("https://example.invalid", 2)]
+        second_upload = collector.upload_pending("https://example.invalid")
+        assert second_upload["batches"] == 0
+        assert len(upload_calls) == 1
+
     context = HardwareContext("test", "pc", "gpu", "maker", "hmd", 90.0, 2000, 2000)
     result = calculate_calibration(
         context,
@@ -1699,5 +1944,5 @@ def run_self_test() -> int:
         precise=True,
     )
     assert 105 <= result.recommended_scale <= 115 and not result.cpu_bound
-    print("SELF-TEST PASS: 控制核心、VRC 世界人数学习、目标 FPS 预算与校准计算正常。")
+    print("SELF-TEST PASS: 控制核心、VRC 被动数据采集、目标 FPS 预算与校准计算正常。")
     return 0

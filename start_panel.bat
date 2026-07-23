@@ -5,6 +5,10 @@ if exist "FramePilotVR.exe" (
   start "" "FramePilotVR.exe"
   exit /b 0
 )
+if exist "FramePilotVR\FramePilotVR.exe" (
+  start "" "FramePilotVR\FramePilotVR.exe"
+  exit /b 0
+)
 if exist "dist\FramePilotVR\FramePilotVR.exe" (
   start "" "dist\FramePilotVR\FramePilotVR.exe"
   exit /b 0

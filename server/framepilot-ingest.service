@@ -1,0 +1,31 @@
+[Unit]
+Description=FramePilot VR telemetry ingest
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=framepilot
+Group=framepilot
+WorkingDirectory=/opt/framepilot-ingest
+Environment=PYTHONUNBUFFERED=1
+Environment=FRAMEPILOT_DATA_ROOT=/srv/framepilot
+Environment=FRAMEPILOT_ORIGIN_SECRET_FILE=/etc/framepilot/origin-secret
+Environment=FRAMEPILOT_LISTEN_HOST=127.0.0.1
+Environment=FRAMEPILOT_LISTEN_PORT=8787
+ExecStart=/usr/bin/python3 /opt/framepilot-ingest/ingest_service.py
+Restart=on-failure
+RestartSec=3
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/framepilot
+CapabilityBoundingSet=
+LockPersonality=true
+MemoryDenyWriteExecute=true
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+SystemCallArchitectures=native
+
+[Install]
+WantedBy=multi-user.target

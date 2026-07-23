@@ -1,0 +1,14 @@
+[Unit]
+Description=Back up FramePilot VR SQLite metadata
+
+[Service]
+Type=oneshot
+User=framepilot
+Group=framepilot
+Environment=FRAMEPILOT_DATA_ROOT=/srv/framepilot
+ExecStart=/usr/bin/python3 /opt/framepilot-ingest/framepilot-backup.py
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/srv/framepilot

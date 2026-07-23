@@ -1,0 +1,10 @@
+[Unit]
+Description=Daily FramePilot VR metadata backup
+
+[Timer]
+OnCalendar=*-*-* 04:20:00 UTC
+Persistent=true
+RandomizedDelaySec=900
+
+[Install]
+WantedBy=timers.target

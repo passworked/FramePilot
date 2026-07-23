@@ -12,4 +12,4 @@ screenshots/
 .mypy_cache/
 .ruff_cache/
 *.log
-
+FramePilotVR-*-windows-x64.zip
