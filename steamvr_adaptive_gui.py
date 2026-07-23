@@ -1,0 +1,2226 @@
+from __future__ import annotations
+
+import argparse
+import csv
+import datetime as dt
+import html
+import json
+import math
+import os
+from pathlib import Path
+import queue
+import socket
+import sys
+import threading
+import time
+from collections import deque
+
+from PySide6.QtCore import QObject, QPointF, QProcess, QRectF, QSettings, Qt, QThread, QTimer, Signal
+from PySide6.QtGui import QAction, QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap
+from PySide6.QtWidgets import (
+    QApplication,
+    QCheckBox,
+    QComboBox,
+    QDialog,
+    QFrame,
+    QFileDialog,
+    QGridLayout,
+    QGroupBox,
+    QHBoxLayout,
+    QLabel,
+    QMainWindow,
+    QMessageBox,
+    QPushButton,
+    QProgressBar,
+    QScrollArea,
+    QSizePolicy,
+    QSpinBox,
+    QStackedWidget,
+    QSystemTrayIcon,
+    QTextEdit,
+    QVBoxLayout,
+    QWidget,
+    QDoubleSpinBox,
+    QMenu,
+)
+
+from steamvr_core import (
+    AdaptiveRuntime,
+    HardwareContext,
+    RuntimeConfig,
+    StrategyStore,
+    calculate_calibration,
+    executable_dir,
+    process_running,
+)
+
+
+APP_VERSION = "0.6.0"
+
+OVERLAY_HOST = "127.0.0.1"
+OVERLAY_PORT = 39421
+OVERLAY_FIELD_OPTIONS = (
+    ("fps", "实时帧率"),
+    ("gpu_ms", "GPU 帧时间"),
+    ("cpu_ms", "CPU 帧时间"),
+    ("gpu_util", "GPU 占用率"),
+    ("cpu_util", "CPU 占用率"),
+    ("budget", "帧预算"),
+    ("resolution", "等效分辨率"),
+    ("scale", "SteamVR 比例"),
+    ("decision", "调度动作"),
+    ("reprojection", "重投影"),
+    ("vrc_context", "VRC 世界与人数"),
+)
+DEFAULT_OVERLAY_FIELDS = (
+    "fps",
+    "gpu_ms",
+    "cpu_ms",
+    "gpu_util",
+    "budget",
+    "resolution",
+    "scale",
+    "decision",
+    "vrc_context",
+)
+
+
+def compare_ab_results(results: list[dict[str, object]]) -> dict[str, object] | None:
+    a_results = [item for item in results if item.get("variant") == "A"][-3:]
+    b_results = [item for item in results if item.get("variant") == "B"][-3:]
+    if len(a_results) < 3 or len(b_results) < 3:
+        return None
+    a_peak = sum(float(item["adjustment_peak_ms"]) for item in a_results) / 3.0
+    b_peak = sum(float(item["adjustment_peak_ms"]) for item in b_results) / 3.0
+    startup_ok = max(float(item["startup_over_2x_seconds"]) for item in b_results) <= 1.0
+    qualified = startup_ok and a_peak > 0.0 and b_peak <= a_peak * 0.70
+    return {
+        "qualified": qualified,
+        "a_adjustment_peak_mean_ms": round(a_peak, 3),
+        "b_adjustment_peak_mean_ms": round(b_peak, 3),
+        "peak_reduction_pct": round((1.0 - b_peak / a_peak) * 100.0, 1) if a_peak else 0.0,
+        "startup_ok": startup_ok,
+    }
+
+
+ZH_EN = {
+    "实时帧预算控制台 · 默认只读": "Real-time frame budget console · Read-only by default",
+    "等待场景应用": "Waiting for scene application",
+    "正在连接": "Connecting",
+    "GPU 帧时间 P95": "GPU frame time P95",
+    "CPU 帧时间 P95": "CPU frame time P95",
+    "系统 GPU 占用": "System GPU usage",
+    "SteamVR 分辨率": "SteamVR resolution",
+    "帧预算 —": "Frame budget —",
+    "系统 CPU —": "System CPU —",
+    "建议 —": "Recommendation —",
+    "最近 3 分钟性能趋势": "Performance trend · Last 3 minutes",
+    "事件与写入记录": "Events and write history",
+    "清空": "Clear",
+    "运行模式": "Run mode",
+    "控制预设": "Control preset",
+    "执行方式": "Execution mode",
+    "目标帧率预算": "Target frame-rate budget",
+    "自动（跟随头显）": "Auto (follow HMD)",
+    "原生刷新率": "Native refresh",
+    "刷新率的 1/2": "1/2 refresh",
+    "刷新率的 1/3": "1/3 refresh",
+    "刷新率的 1/4": "1/4 refresh",
+    "高级模式": "Advanced mode",
+    "仅改变动态分辨率预算，不是游戏限帧器": "Changes the dynamic-resolution budget; not a game FPS limiter",
+    "只读监控": "Read-only monitor",
+    "单步自动调整": "One-step adjustment",
+    "连续自适应": "Continuous adaptive",
+    "解锁 SteamVR 设置写入": "Unlock SteamVR setting writes",
+    "退出时恢复启动值": "Restore startup value on exit",
+    "自适应参数": "Adaptive parameters",
+    "最低": "Minimum",
+    "最高": "Maximum",
+    "降档": "Step down",
+    "升档": "Step up",
+    "冷却": "Cooldown",
+    "升档观察": "Raise observation",
+    "应用控制参数": "Apply control parameters",
+    "跨机器策略与本机校准": "Portable policy and local calibration",
+    "等待读取本机 GPU / HMD 指纹": "Waiting for local GPU / HMD fingerprint",
+    "导入策略": "Import policy",
+    "导出策略": "Export policy",
+    "采样时长": "Sample duration",
+    "只读校准": "Read-only calibration",
+    "精确阶梯": "Precise steps",
+    "便携策略不包含另一台机器的最终分辨率": "Portable policies never include another PC's final resolution",
+    "手动验证": "Manual validation",
+    "目标分辨率": "Target resolution",
+    "应用一次": "Apply once",
+    "恢复面板启动值": "Restore panel startup value",
+    "等待性能数据": "Waiting for performance data",
+    "保守": "Conservative",
+    "平衡": "Balanced",
+    "激进": "Aggressive",
+    "自定义/已迁移": "Custom / imported",
+    "显示面板": "Show panel",
+    "退出": "Exit",
+    "参数错误": "Invalid parameters",
+    # Overlay strings intentionally live behind the existing i18n hook. The
+    # dogfood build remains Chinese-first while the feature is still moving.
+}
+EN_ZH = {value: key for key, value in ZH_EN.items()}
+
+
+STYLE = """
+QWidget {
+    color: #E8EDF4;
+    font-family: "Segoe UI", "Microsoft YaHei UI";
+    font-size: 13px;
+}
+QMainWindow, QWidget#Root { background: #0B1017; }
+QFrame#Card, QGroupBox {
+    background: #111923;
+    border: 1px solid #223041;
+    border-radius: 12px;
+}
+QGroupBox {
+    margin-top: 12px;
+    padding: 18px 12px 12px 12px;
+    font-weight: 600;
+    color: #AFC0D5;
+}
+QGroupBox::title {
+    subcontrol-origin: margin;
+    left: 12px;
+    padding: 0 6px;
+}
+QLabel#Muted { color: #8091A6; }
+QLabel#Title { font-size: 23px; font-weight: 700; color: #F4F7FB; }
+QLabel#Value { font-size: 25px; font-weight: 700; color: #FFFFFF; }
+QLabel#StatusGood {
+    color: #6FE0B1;
+    background: #102C26;
+    border: 1px solid #235C4D;
+    border-radius: 10px;
+    padding: 5px 11px;
+    font-weight: 600;
+}
+QLabel#StatusWait {
+    color: #F2C36B;
+    background: #2A2415;
+    border: 1px solid #5A4A22;
+    border-radius: 10px;
+    padding: 5px 11px;
+    font-weight: 600;
+}
+QPushButton {
+    background: #1B2A3A;
+    border: 1px solid #2D435A;
+    border-radius: 8px;
+    padding: 8px 12px;
+    font-weight: 600;
+}
+QPushButton:hover { background: #24384D; border-color: #3A5874; }
+QPushButton:pressed { background: #152434; }
+QPushButton#Primary { background: #1677FF; border-color: #3A8CFF; color: white; }
+QPushButton#Primary:hover { background: #2D85FF; }
+QPushButton#Danger { background: #3A1B22; border-color: #71303D; color: #FFB3C0; }
+QPushButton:disabled { background: #151C25; border-color: #222C38; color: #5E6A78; }
+QComboBox, QSpinBox, QDoubleSpinBox {
+    background: #0D141D;
+    border: 1px solid #2A3A4D;
+    border-radius: 7px;
+    padding: 6px 8px;
+    min-height: 22px;
+}
+QComboBox:focus, QSpinBox:focus, QDoubleSpinBox:focus { border-color: #3689F7; }
+QCheckBox { spacing: 8px; }
+QCheckBox::indicator { width: 17px; height: 17px; }
+QTextEdit {
+    background: #090E14;
+    border: 1px solid #1D2936;
+    border-radius: 9px;
+    padding: 7px;
+    font-family: "Cascadia Mono", "Consolas", monospace;
+    font-size: 12px;
+}
+QProgressBar {
+    background: #0D141D;
+    border: 1px solid #2A3A4D;
+    border-radius: 6px;
+    min-height: 12px;
+    text-align: center;
+    color: #DCE5EF;
+}
+QProgressBar::chunk { background: #1677FF; border-radius: 5px; }
+QScrollBar:vertical { background: #0B1119; width: 10px; border: none; }
+QScrollBar::handle:vertical { background: #2A3B4D; min-height: 30px; border-radius: 5px; }
+QToolTip { background: #182331; color: #F3F6FA; border: 1px solid #34495F; padding: 5px; }
+"""
+
+
+PRESETS = {
+    "保守": dict(
+        min_scale=40,
+        max_scale=120,
+        step_down=1,
+        step_up=5,
+        cooldown_seconds=15.0,
+        raise_stable_seconds=20.0,
+        gpu_down_ratio=0.97,
+        gpu_raise_ratio=0.62,
+    ),
+    "平衡": dict(
+        min_scale=30,
+        max_scale=150,
+        step_down=1,
+        step_up=5,
+        cooldown_seconds=8.0,
+        raise_stable_seconds=12.0,
+        gpu_down_ratio=0.92,
+        gpu_raise_ratio=0.72,
+    ),
+    "激进": dict(
+        min_scale=20,
+        max_scale=200,
+        step_down=1,
+        step_up=10,
+        cooldown_seconds=4.0,
+        raise_stable_seconds=6.0,
+        gpu_down_ratio=0.87,
+        gpu_raise_ratio=0.80,
+    ),
+}
+
+
+class MetricCard(QFrame):
+    def __init__(self, title: str, value: str = "—", subtitle: str = "") -> None:
+        super().__init__()
+        self.setObjectName("Card")
+        self.setMinimumHeight(104)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(15, 12, 15, 12)
+        layout.setSpacing(3)
+        title_label = QLabel(title)
+        title_label.setObjectName("Muted")
+        self.value_label = QLabel(value)
+        self.value_label.setObjectName("Value")
+        self.subtitle_label = QLabel(subtitle)
+        self.subtitle_label.setObjectName("Muted")
+        layout.addWidget(title_label)
+        layout.addWidget(self.value_label)
+        layout.addWidget(self.subtitle_label)
+
+    def set_values(self, value: str, subtitle: str = "") -> None:
+        self.value_label.setText(value)
+        self.subtitle_label.setText(subtitle)
+
+
+class PerformanceChart(QWidget):
+    def __init__(self) -> None:
+        super().__init__()
+        self.setMinimumHeight(260)
+        self.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Expanding)
+        self.gpu: deque[float] = deque(maxlen=90)
+        self.cpu: deque[float] = deque(maxlen=90)
+        self.budget = 11.111
+        self.language = "zh"
+
+    def add_point(self, gpu_ms: float, cpu_ms: float, budget_ms: float) -> None:
+        self.gpu.append(gpu_ms)
+        self.cpu.append(cpu_ms)
+        self.budget = budget_ms
+        self.update()
+
+    def paintEvent(self, event) -> None:  # noqa: N802
+        del event
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+        rect = QRectF(self.rect()).adjusted(55, 24, -20, -38)
+
+        gradient = QLinearGradient(0, 0, 0, self.height())
+        gradient.setColorAt(0, QColor("#111B27"))
+        gradient.setColorAt(1, QColor("#0C131C"))
+        painter.fillRect(self.rect(), gradient)
+
+        values = list(self.gpu) + list(self.cpu) + [self.budget]
+        max_value = max(16.0, max(values, default=16.0) * 1.15)
+
+        painter.setFont(QFont("Segoe UI", 9))
+        for index in range(5):
+            y = rect.top() + rect.height() * index / 4
+            value = max_value * (1 - index / 4)
+            painter.setPen(QPen(QColor("#233142"), 1))
+            painter.drawLine(QPointF(rect.left(), y), QPointF(rect.right(), y))
+            painter.setPen(QColor("#718399"))
+            painter.drawText(QRectF(3, y - 9, 47, 18), Qt.AlignmentFlag.AlignRight, f"{value:.0f} ms")
+
+        budget_y = rect.bottom() - (self.budget / max_value) * rect.height()
+        budget_pen = QPen(QColor("#E7D36A"), 1.5, Qt.PenStyle.DashLine)
+        painter.setPen(budget_pen)
+        painter.drawLine(QPointF(rect.left(), budget_y), QPointF(rect.right(), budget_y))
+        budget_label = "Frame budget" if self.language == "en" else "帧预算"
+        painter.drawText(QRectF(rect.right() - 115, budget_y - 20, 110, 18), Qt.AlignmentFlag.AlignRight, budget_label)
+
+        def draw_series(series: deque[float], color: str) -> None:
+            if len(series) < 2:
+                return
+            points = []
+            count = max(2, series.maxlen or len(series))
+            start = count - len(series)
+            for i, value in enumerate(series):
+                x = rect.left() + rect.width() * (start + i) / (count - 1)
+                y = rect.bottom() - min(value, max_value) / max_value * rect.height()
+                points.append(QPointF(x, y))
+            painter.setPen(QPen(QColor(color), 2.2))
+            for a, b in zip(points, points[1:]):
+                painter.drawLine(a, b)
+
+        draw_series(self.gpu, "#42D7FF")
+        draw_series(self.cpu, "#FF9D66")
+
+        painter.setPen(QColor("#42D7FF"))
+        painter.drawText(QRectF(rect.left(), rect.bottom() + 10, 100, 20), "● GPU P95")
+        painter.setPen(QColor("#FF9D66"))
+        painter.drawText(QRectF(rect.left() + 105, rect.bottom() + 10, 100, 20), "● CPU P95")
+
+
+class OnboardingDialog(QDialog):
+    def __init__(self, main_window: "MainWindow") -> None:
+        super().__init__(main_window)
+        self.main_window = main_window
+        self.setWindowTitle("首次使用引导")
+        self.setModal(True)
+        self.setMinimumSize(640, 430)
+        self.resize(680, 460)
+        self.setStyleSheet(
+            "QDialog{background:#0B1017;}"
+            "QLabel#GuideTitle{font-size:25px;font-weight:700;color:#F4F7FB;}"
+            "QLabel#GuideStep{color:#42D7FF;font-weight:650;}"
+            "QLabel#GuideCard{background:#111923;border:1px solid #26384C;border-radius:10px;padding:14px;}"
+            "QPushButton#Primary:disabled{background:#151C25;border-color:#222C38;color:#5E6A78;}"
+        )
+
+        root = QVBoxLayout(self)
+        root.setContentsMargins(28, 24, 28, 24)
+        root.setSpacing(18)
+        self.step_label = QLabel()
+        self.step_label.setObjectName("GuideStep")
+        root.addWidget(self.step_label)
+
+        self.pages = QStackedWidget()
+        self.pages.addWidget(self._quality_page())
+        self.pages.addWidget(self._target_page())
+        self.pages.addWidget(self._welcome_page())
+        self.pages.currentChanged.connect(self._page_changed)
+        root.addWidget(self.pages, 1)
+
+        navigation = QHBoxLayout()
+        self.back_button = QPushButton("上一步")
+        self.back_button.clicked.connect(self.previous_page)
+        self.next_button = QPushButton("下一步")
+        self.next_button.setObjectName("Primary")
+        self.next_button.clicked.connect(self.next_page)
+        navigation.addWidget(self.back_button)
+        navigation.addStretch()
+        navigation.addWidget(self.next_button)
+        root.addLayout(navigation)
+        self._page_changed(0)
+
+    @staticmethod
+    def _title(text: str) -> QLabel:
+        label = QLabel(text)
+        label.setObjectName("GuideTitle")
+        label.setWordWrap(True)
+        return label
+
+    def _quality_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        layout.addWidget(self._title("请先把串流画质调到最高档"))
+        text = QLabel(
+            "动态分辨率需要以串流软件提供的最高基础画质为起点，否则面板只能在一个较低的编码分辨率上继续缩放。"
+        )
+        text.setWordWrap(True)
+        text.setObjectName("Muted")
+        layout.addWidget(text)
+        examples = QLabel(
+            "<b>PICO 互联：</b>选择“超高清+”<br><br>"
+            "<b>Virtual Desktop：</b>选择“Monster”<br><br>"
+            "其他串流软件请选择设备与显卡能够使用的最高画质档。"
+        )
+        examples.setObjectName("GuideCard")
+        examples.setWordWrap(True)
+        layout.addWidget(examples)
+        self.quality_confirm = QCheckBox("我已在串流软件中选择最高档画质")
+        self.quality_confirm.toggled.connect(self._update_next_enabled)
+        layout.addWidget(self.quality_confirm)
+        layout.addStretch()
+        return page
+
+    def _target_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        layout.addWidget(self._title("选择目标帧率"))
+        text = QLabel("这里选择的是动态分辨率使用的帧预算，不会替游戏安装限帧器。")
+        text.setWordWrap(True)
+        text.setObjectName("Muted")
+        layout.addWidget(text)
+        self.guide_target_combo = QComboBox()
+        self.guide_target_combo.addItem("原生刷新率 · 画面最流畅，性能要求最高", 1)
+        self.guide_target_combo.addItem("刷新率的 1/2 · 推荐从这里开始", 2)
+        self.guide_target_combo.addItem("刷新率的 1/3 · 适合约 30 FPS 的高画质目标", 3)
+        self.guide_target_combo.addItem("刷新率的 1/4 · 优先画质与重型场景", 4)
+        current_divisor = int(self.main_window.target_fps_combo.currentData())
+        current_index = self.guide_target_combo.findData(current_divisor)
+        self.guide_target_combo.setCurrentIndex(max(0, current_index))
+        layout.addWidget(self.guide_target_combo)
+        hint = QLabel("不确定时选择 1/2；之后可以随时在主面板中修改。")
+        hint.setObjectName("GuideCard")
+        hint.setWordWrap(True)
+        layout.addWidget(hint)
+        layout.addStretch()
+        return page
+
+    def _welcome_page(self) -> QWidget:
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(14)
+        layout.addWidget(self._title("欢迎使用 FramePilot VR"))
+        text = QLabel(
+            "设置已经准备完成。面板会先保持只读监控，让你观察帧时间、GPU 压力和推荐分辨率。"
+        )
+        text.setWordWrap(True)
+        layout.addWidget(text)
+        self.guide_summary = QLabel()
+        self.guide_summary.setObjectName("GuideCard")
+        self.guide_summary.setWordWrap(True)
+        layout.addWidget(self.guide_summary)
+        safety = QLabel("确认数据正常后，再从主面板解锁 SteamVR 设置写入。")
+        safety.setObjectName("Muted")
+        safety.setWordWrap(True)
+        layout.addWidget(safety)
+        layout.addStretch()
+        return page
+
+    def _update_next_enabled(self) -> None:
+        self.next_button.setEnabled(self.pages.currentIndex() != 0 or self.quality_confirm.isChecked())
+
+    def _page_changed(self, index: int) -> None:
+        self.step_label.setText(f"第 {index + 1} 步，共 3 步")
+        self.back_button.setVisible(index > 0)
+        self.next_button.setText("开始使用" if index == 2 else "下一步")
+        if index == 2:
+            self.guide_summary.setText(
+                "✓ 串流画质：已确认最高档<br><br>"
+                f"✓ 目标帧率：{self.guide_target_combo.currentText()}<br><br>"
+                "✓ 初始状态：只读监控"
+            )
+        self._update_next_enabled()
+
+    def previous_page(self) -> None:
+        self.pages.setCurrentIndex(max(0, self.pages.currentIndex() - 1))
+
+    def next_page(self) -> None:
+        index = self.pages.currentIndex()
+        if index == 0 and not self.quality_confirm.isChecked():
+            return
+        if index < 2:
+            self.pages.setCurrentIndex(index + 1)
+            return
+        divisor = int(self.guide_target_combo.currentData())
+        target_index = self.main_window.target_fps_combo.findData(divisor)
+        if target_index >= 0:
+            self.main_window.target_fps_combo.setCurrentIndex(target_index)
+        self.main_window.settings.setValue("onboarding/completed", True)
+        self.main_window.settings.setValue("onboarding/revision", 1)
+        self.main_window.settings.sync()
+        self.main_window.apply_config()
+        self.main_window.append_event("success", f"首次使用引导完成 · 目标刷新率 1/{divisor}")
+        self.accept()
+
+
+class MonitorWorker(QObject):
+    snapshot = Signal(dict)
+    event = Signal(str, str)
+    connection = Signal(bool, str)
+    hardware = Signal(dict)
+    calibration_progress = Signal(dict)
+    calibration_finished = Signal(dict)
+    experiment_progress = Signal(dict)
+    experiment_finished = Signal(dict)
+    finished = Signal()
+
+    def __init__(self, log_dir: Path) -> None:
+        super().__init__()
+        self.log_dir = log_dir
+        self.commands: queue.Queue[tuple[str, object]] = queue.Queue()
+        self.stop_event = threading.Event()
+        self.runtime: AdaptiveRuntime | None = None
+        local_root = Path(os.environ.get("LOCALAPPDATA", str(executable_dir()))) / "SteamVRAdaptiveResolution"
+        self.strategy_store = StrategyStore(local_root / "strategy-store.json")
+        self.calibration: dict[str, object] | None = None
+        self.experiment: dict[str, object] | None = None
+        self.experiment_results: list[dict[str, object]] = []
+        self.experiment_counts = {"A": 0, "B": 0}
+        self._last_snapshot = None
+        self._hardware_emitted = ""
+        self.overlay_fields = list(DEFAULT_OVERLAY_FIELDS)
+        self.overlay_config = {"anchor": "upper_left", "size_pct": 100}
+        self.overlay_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+
+    def submit_config(self, config: RuntimeConfig) -> None:
+        self.commands.put(("config", config))
+
+    def submit_manual_scale(self, scale: int) -> None:
+        self.commands.put(("manual", scale))
+
+    def submit_restore(self) -> None:
+        self.commands.put(("restore", None))
+
+    def submit_overlay_settings(self, fields: list[str], anchor: str, size_pct: int) -> None:
+        self.commands.put(
+            ("overlay_settings", {"fields": list(fields), "anchor": anchor, "size_pct": int(size_pct)})
+        )
+
+    def _send_overlay_packet(self, data: dict[str, object] | None = None) -> None:
+        packet = json.dumps(
+            {"data": data, "visible_fields": self.overlay_fields, "config": self.overlay_config},
+            ensure_ascii=False,
+        ).encode("utf-8")
+        try:
+            self.overlay_socket.sendto(packet, (OVERLAY_HOST, OVERLAY_PORT))
+        except OSError:
+            pass
+
+    def submit_calibration(self, precise: bool, duration: float) -> None:
+        self.commands.put(("calibrate", {"precise": precise, "duration": duration}))
+
+    def submit_experiment(self, variant: str) -> None:
+        self.commands.put(("experiment", variant))
+
+    def stop(self) -> None:
+        self.stop_event.set()
+
+    def _drain_commands(self) -> None:
+        assert self.runtime is not None
+        while True:
+            try:
+                command, payload = self.commands.get_nowait()
+            except queue.Empty:
+                break
+            try:
+                if command == "config":
+                    self.runtime.update_config(payload)  # type: ignore[arg-type]
+                    self.event.emit("info", "控制参数已更新")
+                elif command == "manual":
+                    self.runtime.manual_set_scale(int(payload))
+                elif command == "restore":
+                    self.runtime.restore_current()
+                elif command == "overlay_settings":
+                    allowed = {field for field, _label in OVERLAY_FIELD_OPTIONS}
+                    options = payload if isinstance(payload, dict) else {}
+                    fields = options.get("fields", [])
+                    self.overlay_fields = [str(field) for field in fields if str(field) in allowed] if isinstance(fields, list) else []
+                    anchor = str(options.get("anchor", "upper_left"))
+                    if anchor not in {"upper_left", "upper_right", "lower_left", "lower_right"}:
+                        anchor = "upper_left"
+                    self.overlay_config = {
+                        "anchor": anchor,
+                        "size_pct": max(70, min(140, int(options.get("size_pct", 100)))),
+                    }
+                    self._send_overlay_packet()
+                elif command == "calibrate":
+                    self._start_calibration(payload)  # type: ignore[arg-type]
+                elif command == "experiment":
+                    self._start_experiment(str(payload))
+            except Exception as exc:
+                self.event.emit("error", str(exc))
+                if command == "calibrate":
+                    self.calibration_progress.emit(
+                        {"percent": 0, "text": f"无法开始校准: {exc}", "done": True}
+                    )
+                elif command == "experiment":
+                    self.experiment_finished.emit({"error": str(exc)})
+
+    def _start_experiment(self, variant: str) -> None:
+        assert self.runtime is not None
+        if variant not in {"A", "B"}:
+            raise ValueError("未知 A/B 测试组")
+        if self.experiment is not None:
+            raise RuntimeError("已有 A/B 测试正在运行")
+        if self.calibration is not None:
+            raise RuntimeError("校准期间不能开始 A/B 测试")
+        if self._last_snapshot is None or not self.runtime.current_app:
+            raise RuntimeError("需要先进入 VRChat 场景并取得帧时序")
+        if not self.runtime.config.armed:
+            raise PermissionError("A/B 测试需要先解锁 SteamVR 写入")
+        original_config = self.runtime.config
+        original_scale = self.runtime.current_scale
+        start_scale = 100 if variant == "A" else 150
+        start_scale = max(original_config.min_scale, min(max(original_config.max_scale, 150), start_scale))
+        trial_config = RuntimeConfig(
+            **{
+                **original_config.__dict__,
+                "mode": "continuous",
+                "armed": True,
+                "target_divisor": 0,
+                "target_fps": 30.0,
+                "max_scale": max(original_config.max_scale, 150),
+                "step_down": 1,
+                "evaluate_seconds": 0.25,
+                "raise_stable_seconds": min(original_config.raise_stable_seconds, 8.0),
+                "startup_scale": 0,
+            }
+        ).validated()
+        self.runtime.update_config(trial_config)
+        self.runtime.experiment_set_scale(start_scale, f"A/B {variant} 组起始值")
+        now = time.monotonic()
+        self.experiment = {
+            "variant": variant,
+            "run": self.experiment_counts[variant] + 1,
+            "started": now,
+            "last_sample": now,
+            "duration": 30.0,
+            "original_config": original_config,
+            "original_scale": original_scale,
+            "app_key": self.runtime.current_app,
+            "start_scale": start_scale,
+            "write_times": [],
+            "startup_over_2x_seconds": 0.0,
+            "adjustment_peak_ms": 0.0,
+            "overall_peak_ms": 0.0,
+            "reprojection_peak_pct": 0.0,
+            "dropped_peak": 0,
+        }
+        self.event.emit("info", f"A/B {variant} 组第 {self.experiment_counts[variant] + 1} 轮开始 · 30 FPS · 起始 {start_scale}%")
+        self.experiment_progress.emit({"variant": variant, "run": self.experiment_counts[variant] + 1, "percent": 0})
+
+    def _process_experiment(self, snapshot) -> None:
+        if self.experiment is None:
+            return
+        state = self.experiment
+        if snapshot.app_key != state["app_key"]:
+            self._cancel_experiment("场景应用发生变化")
+            return
+        now = time.monotonic()
+        started = float(state["started"])
+        elapsed = now - started
+        delta = max(0.0, min(1.0, now - float(state["last_sample"])))
+        state["last_sample"] = now
+        frame_ms = float(snapshot.frame_interval_p95_ms)
+        budget_ms = float(snapshot.budget_ms)
+        state["overall_peak_ms"] = max(float(state["overall_peak_ms"]), frame_ms)
+        state["reprojection_peak_pct"] = max(float(state["reprojection_peak_pct"]), float(snapshot.reprojection_pct))
+        state["dropped_peak"] = max(int(state["dropped_peak"]), int(snapshot.dropped))
+        if elapsed <= 5.0 and frame_ms > budget_ms * 2.0:
+            state["startup_over_2x_seconds"] = float(state["startup_over_2x_seconds"]) + delta
+        write_times = state["write_times"]
+        if snapshot.write_applied:
+            write_times.append(now)
+        if any(0.0 <= now - float(write_at) <= 5.0 for write_at in write_times):
+            state["adjustment_peak_ms"] = max(float(state["adjustment_peak_ms"]), frame_ms)
+        percent = min(100, int(elapsed / float(state["duration"]) * 100))
+        self.experiment_progress.emit(
+            {"variant": state["variant"], "run": state["run"], "percent": percent, "elapsed": elapsed}
+        )
+        if elapsed >= float(state["duration"]):
+            self._finish_experiment()
+
+    def _finish_experiment(self) -> None:
+        assert self.runtime is not None and self.experiment is not None
+        state = self.experiment
+        variant = str(state["variant"])
+        result = {
+            "timestamp": dt.datetime.now().isoformat(timespec="seconds"),
+            "variant": variant,
+            "run": int(state["run"]),
+            "start_scale": int(state["start_scale"]),
+            "startup_over_2x_seconds": round(float(state["startup_over_2x_seconds"]), 3),
+            "adjustment_peak_ms": round(float(state["adjustment_peak_ms"]), 3),
+            "overall_peak_ms": round(float(state["overall_peak_ms"]), 3),
+            "reprojection_peak_pct": round(float(state["reprojection_peak_pct"]), 3),
+            "dropped_peak": int(state["dropped_peak"]),
+        }
+        try:
+            self.runtime.experiment_set_scale(int(state["original_scale"]), "A/B 测试结束恢复")
+        finally:
+            self.runtime.update_config(state["original_config"])  # type: ignore[arg-type]
+        self.experiment_results.append(result)
+        self.experiment_counts[variant] += 1
+        result_path = self.log_dir / "ab_experiment_results.jsonl"
+        with result_path.open("a", encoding="utf-8") as output:
+            output.write(json.dumps(result, ensure_ascii=False) + "\n")
+        result["counts"] = dict(self.experiment_counts)
+        comparison = compare_ab_results(self.experiment_results)
+        if comparison is not None:
+            result.update(comparison)
+        self.event.emit("success", f"A/B {variant} 组第 {state['run']} 轮完成 · 调档峰值 {result['adjustment_peak_ms']:.2f} ms")
+        self.experiment = None
+        self.experiment_progress.emit({"variant": variant, "run": state["run"], "percent": 100, "done": True})
+        self.experiment_finished.emit(result)
+
+    def _cancel_experiment(self, reason: str) -> None:
+        if self.runtime is None or self.experiment is None:
+            return
+        state = self.experiment
+        try:
+            self.runtime.experiment_set_scale(int(state["original_scale"]), "A/B 测试取消恢复")
+        except Exception as exc:
+            self.event.emit("error", f"A/B 测试恢复失败: {exc}")
+        self.runtime.update_config(state["original_config"])  # type: ignore[arg-type]
+        self.experiment = None
+        self.event.emit("warning", f"A/B 测试已取消: {reason}")
+        self.experiment_finished.emit({"error": reason})
+
+    def _start_calibration(self, options: dict[str, object]) -> None:
+        assert self.runtime is not None
+        if self.calibration is not None:
+            raise RuntimeError("已有校准正在进行")
+        if self.experiment is not None:
+            raise RuntimeError("A/B 测试期间不能开始校准")
+        if self._last_snapshot is None or not self.runtime.current_app:
+            raise RuntimeError("尚未取得 VR 游戏帧时序，暂时不能校准")
+        precise = bool(options.get("precise", False))
+        if precise and not self.runtime.config.armed:
+            raise PermissionError("精确校准需要先解锁 SteamVR 设置写入")
+        original = int(self.runtime.current_scale)
+        stages = [original]
+        if precise:
+            stages = list(dict.fromkeys((original, max(20, original - 10), min(500, original + 10))))
+        duration = max(15.0, float(options.get("duration", 45.0)))
+        previous = self.runtime.config
+        self.runtime.update_config(RuntimeConfig(**{**previous.__dict__, "mode": "monitor"}))
+        self.calibration = {
+            "precise": precise,
+            "app_key": self.runtime.current_app,
+            "original": original,
+            "stages": stages,
+            "stage_index": 0,
+            "stage_seconds": duration / len(stages),
+            "stage_started": time.monotonic(),
+            "started": time.monotonic(),
+            "samples": {scale: [] for scale in stages},
+            "budget_ms": float(self._last_snapshot.budget_ms),
+            "previous_config": previous,
+        }
+        self.event.emit("info", f"开始{'精确阶梯' if precise else '只读'}校准 · {len(stages)} 个阶段")
+        self.calibration_progress.emit({"percent": 0, "text": f"阶段 1/{len(stages)} · {stages[0]}%"})
+
+    def _finish_calibration(self) -> None:
+        assert self.runtime is not None and self.calibration is not None
+        state = self.calibration
+        try:
+            original = int(state["original"])
+            if self.runtime.current_scale != original:
+                self.runtime.manual_set_scale(original)
+            context = self.runtime.hardware()
+            result = calculate_calibration(
+                context=context,
+                app_key=str(state["app_key"]),
+                original_scale=original,
+                budget_ms=float(state["budget_ms"]),
+                samples_by_scale=state["samples"],  # type: ignore[arg-type]
+                precise=bool(state["precise"]),
+            )
+            self.strategy_store.save_calibration(context, result)
+            self.calibration_finished.emit(result.as_dict())
+            bound = " · 检测为 CPU 受限" if result.cpu_bound else ""
+            self.event.emit("success", f"校准完成 · 建议 {result.recommended_scale}%{bound}")
+        except Exception as exc:
+            self.event.emit("error", f"校准失败: {exc}")
+            self.calibration_finished.emit({"error": str(exc)})
+        finally:
+            previous = state["previous_config"]
+            self.runtime.update_config(previous)  # type: ignore[arg-type]
+            self.calibration = None
+
+    def _process_calibration(self, snapshot) -> None:
+        if self.calibration is None:
+            return
+        state = self.calibration
+        if snapshot.app_key != state["app_key"]:
+            self.event.emit("error", "校准期间场景应用发生变化，已取消")
+            self._cancel_calibration()
+            return
+        stages = state["stages"]
+        stage_index = int(state["stage_index"])
+        target = int(stages[stage_index])
+        elapsed = time.monotonic() - float(state["stage_started"])
+        stage_seconds = float(state["stage_seconds"])
+        if snapshot.resolution_scale == target and elapsed >= min(2.0, stage_seconds * 0.2):
+            state["samples"][target].append(snapshot)  # type: ignore[index]
+        overall = (stage_index + min(1.0, elapsed / stage_seconds)) / len(stages)
+        self.calibration_progress.emit(
+            {"percent": int(overall * 100), "text": f"阶段 {stage_index + 1}/{len(stages)} · {target}%"}
+        )
+        if elapsed < stage_seconds:
+            return
+        if stage_index + 1 >= len(stages):
+            self._finish_calibration()
+            return
+        state["stage_index"] = stage_index + 1
+        state["stage_started"] = time.monotonic()
+        next_target = int(stages[stage_index + 1])
+        self.runtime.manual_set_scale(next_target)
+        self.event.emit("write", f"校准阶段切换到 {next_target}%")
+
+    def _cancel_calibration(self) -> None:
+        if self.runtime is None or self.calibration is None:
+            return
+        state = self.calibration
+        try:
+            original = int(state["original"])
+            if self.runtime.current_scale != original:
+                self.runtime.manual_set_scale(original)
+        except Exception as exc:
+            self.event.emit("error", f"取消校准时恢复失败: {exc}")
+        self.runtime.update_config(state["previous_config"])  # type: ignore[arg-type]
+        self.calibration = None
+
+    def run(self) -> None:
+        self.log_dir.mkdir(parents=True, exist_ok=True)
+        stamp = dt.datetime.now().strftime("%Y%m%d_%H%M%S")
+        log_path = self.log_dir / f"steamvr_panel_{stamp}.csv"
+        log_file = log_path.open("w", newline="", encoding="utf-8-sig")
+        writer = None
+        self.runtime = AdaptiveRuntime(RuntimeConfig(restore_on_exit=True))
+        self.event.emit("info", f"日志已创建: {log_path.name}")
+        last_connection_message = ""
+        try:
+            while not self.stop_event.is_set():
+                self._drain_commands()
+                if not process_running("vrserver.exe"):
+                    if last_connection_message != "waiting":
+                        self.connection.emit(False, "等待 SteamVR")
+                        self.event.emit("warning", "SteamVR 未运行，面板将自动重连")
+                        last_connection_message = "waiting"
+                    time.sleep(1.0)
+                    continue
+                try:
+                    result = self.runtime.poll()
+                    if last_connection_message != "connected":
+                        self.connection.emit(True, "SteamVR 已连接")
+                        last_connection_message = "connected"
+                    for level, message in self.runtime.drain_events():
+                        self.event.emit(level, message)
+                    if self.runtime.connected:
+                        context = self.runtime.hardware()
+                        if context.hardware_id != self._hardware_emitted:
+                            self.hardware.emit(context.as_dict())
+                            self._hardware_emitted = context.hardware_id
+                    if result is not None:
+                        self._last_snapshot = result
+                        self._process_calibration(result)
+                        self._process_experiment(result)
+                        data = result.as_dict()
+                        active_experiment = self.experiment
+                        data.update(
+                            {
+                                "experiment_variant": str(active_experiment["variant"]) if active_experiment else "",
+                                "experiment_run": int(active_experiment["run"]) if active_experiment else 0,
+                                "experiment_elapsed_s": round(time.monotonic() - float(active_experiment["started"]), 3) if active_experiment else 0.0,
+                            }
+                        )
+                        self._send_overlay_packet(data)
+                        self.snapshot.emit(data)
+                        if writer is None:
+                            writer = csv.DictWriter(log_file, fieldnames=list(data.keys()))
+                            writer.writeheader()
+                        writer.writerow(data)
+                        log_file.flush()
+                except Exception as exc:
+                    self.connection.emit(False, "连接已断开")
+                    self.event.emit("error", f"SteamVR 采样失败: {exc}")
+                    self.runtime.disconnect()
+                    last_connection_message = "error"
+                    time.sleep(1.5)
+                time.sleep(0.2)
+        finally:
+            if self.runtime is not None:
+                self._cancel_experiment("面板退出")
+                self._cancel_calibration()
+                self.runtime.close()
+                for level, message in self.runtime.drain_events():
+                    self.event.emit(level, message)
+            self.overlay_socket.close()
+            log_file.close()
+            self.finished.emit()
+
+
+class MainWindow(QMainWindow):
+    def __init__(
+        self,
+        screenshot_path: Path | None = None,
+        auto_close: float = 0.0,
+        language_override: str | None = None,
+        target_divisor_override: int | None = None,
+        target_fps_override: float | None = None,
+    ) -> None:
+        super().__init__()
+        self.setWindowTitle(f"FramePilot VR · {APP_VERSION}")
+        self.resize(1240, 840)
+        self.setMinimumSize(1060, 700)
+        self.setWindowIcon(make_icon())
+        self.last_snapshot: dict[str, object] = {}
+        self.settings = QSettings("OpenAI-Codex", "SteamVRAdaptiveResolution")
+        saved_language = str(self.settings.value("language", "zh"))
+        self.language = language_override or (saved_language if saved_language in {"zh", "en"} else "zh")
+        self.advanced_mode = str(self.settings.value("advanced_mode", "false")).lower() == "true"
+        self._loading_controls = False
+        self.legacy_target_fps = 0.0
+        self.connection_state = (False, "正在连接")
+        self.policy_gpu_down_ratio = float(PRESETS["平衡"]["gpu_down_ratio"])
+        self.policy_gpu_raise_ratio = float(PRESETS["平衡"]["gpu_raise_ratio"])
+        self.policy_cpu_raise_ratio = 0.80
+        self.policy_window_seconds = 3.0
+        self.policy_evaluate_seconds = 0.25
+        self.high_start_qualified = str(self.settings.value("experiment/high_start_qualified", "false")).lower() == "true"
+        self.screenshot_path = screenshot_path
+        self._closing = False
+        self.overlay_process: QProcess | None = None
+        self._overlay_stdout_buffer = ""
+        self.overlay_state = "disabled"
+        self._overlay_expected_stop = False
+        self.onboarding_dialog: OnboardingDialog | None = None
+        self._skip_next_cache = target_divisor_override is not None or target_fps_override is not None
+
+        self._build_ui()
+        self.retranslate_ui(announce=False)
+        self.set_advanced_mode(self.advanced_mode, persist=False)
+        self._restore_cached_config()
+        self._restore_overlay_config()
+        if target_divisor_override is not None:
+            target_index = self.target_fps_combo.findData(int(target_divisor_override))
+            if target_index >= 0:
+                self.target_fps_combo.setCurrentIndex(target_index)
+        elif target_fps_override is not None:
+            self._set_legacy_target(float(target_fps_override))
+        self._start_worker()
+        self._setup_tray()
+        self._sync_overlay_process()
+        self._send_overlay_settings()
+        QTimer.singleShot(500, self.maybe_show_onboarding)
+
+        if screenshot_path is not None:
+            QTimer.singleShot(3500, self.capture_screenshot)
+        if auto_close > 0:
+            QTimer.singleShot(int(auto_close * 1000), self.close)
+    def _build_ui(self) -> None:
+        root = QWidget()
+        root.setObjectName("Root")
+        self.setCentralWidget(root)
+        outer = QVBoxLayout(root)
+        outer.setContentsMargins(20, 17, 20, 18)
+        outer.setSpacing(14)
+
+        header = QHBoxLayout()
+        title_box = QVBoxLayout()
+        title = QLabel("FramePilot VR")
+        title.setObjectName("Title")
+        subtitle = QLabel("实时帧预算控制台 · 默认只读")
+        subtitle.setObjectName("Muted")
+        title_box.addWidget(title)
+        title_box.addWidget(subtitle)
+        header.addLayout(title_box)
+        header.addStretch()
+        self.language_combo = QComboBox()
+        self.language_combo.addItem("中文", "zh")
+        self.language_combo.addItem("English", "en")
+        self.language_combo.setCurrentIndex(0 if self.language == "zh" else 1)
+        self.language_combo.currentIndexChanged.connect(self.language_changed)
+        header.addWidget(self.language_combo)
+        self.guide_button = QPushButton("使用引导")
+        self.guide_button.clicked.connect(lambda: self.show_onboarding(force=True))
+        header.addWidget(self.guide_button)
+        header.addSpacing(12)
+        self.advanced_check = QCheckBox("高级模式")
+        self.advanced_check.setChecked(self.advanced_mode)
+        self.advanced_check.toggled.connect(self.set_advanced_mode)
+        header.addWidget(self.advanced_check)
+        header.addSpacing(12)
+        self.app_label = QLabel("等待场景应用")
+        self.app_label.setObjectName("Muted")
+        self.connection_label = QLabel("正在连接")
+        self.connection_label.setObjectName("StatusWait")
+        header.addWidget(self.app_label)
+        header.addSpacing(12)
+        header.addWidget(self.connection_label)
+        outer.addLayout(header)
+
+        cards = QGridLayout()
+        cards.setHorizontalSpacing(11)
+        self.gpu_card = MetricCard("GPU 帧时间 P95", "—", "帧预算 —")
+        self.cpu_card = MetricCard("CPU 帧时间 P95", "—", "系统 CPU —")
+        self.util_card = MetricCard("系统 GPU 占用", "—", "NVIDIA GPU")
+        self.scale_card = MetricCard(self.tr("等效分辨率（单眼）"), "—", "SteamVR —")
+        for i, card in enumerate((self.gpu_card, self.cpu_card, self.util_card, self.scale_card)):
+            cards.addWidget(card, 0, i)
+        outer.addLayout(cards)
+
+        body = QHBoxLayout()
+        body.setSpacing(14)
+        left = QVBoxLayout()
+        left.setSpacing(12)
+
+        chart_card = QFrame()
+        chart_card.setObjectName("Card")
+        chart_layout = QVBoxLayout(chart_card)
+        chart_layout.setContentsMargins(12, 12, 12, 10)
+        chart_header = QHBoxLayout()
+        chart_title = QLabel("最近 3 分钟性能趋势")
+        chart_title.setStyleSheet("font-weight: 650; font-size: 14px;")
+        self.hmd_label = QLabel("HMD —")
+        self.hmd_label.setObjectName("Muted")
+        chart_header.addWidget(chart_title)
+        chart_header.addStretch()
+        chart_header.addWidget(self.hmd_label)
+        chart_layout.addLayout(chart_header)
+        self.chart = PerformanceChart()
+        chart_layout.addWidget(self.chart)
+        left.addWidget(chart_card, 1)
+        body.addLayout(left, 7)
+
+        controls_scroll = QScrollArea()
+        controls_scroll.setWidgetResizable(True)
+        controls_scroll.setFrameShape(QFrame.Shape.NoFrame)
+        controls_scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+        controls = QWidget()
+        controls_layout = QVBoxLayout(controls)
+        controls_layout.setContentsMargins(0, 0, 2, 0)
+        controls_layout.setSpacing(12)
+
+        self.mode_group = QGroupBox("运行模式")
+        mode_layout = QVBoxLayout(self.mode_group)
+        self.preset_combo = QComboBox()
+        for preset_name in PRESETS:
+            self.preset_combo.addItem(preset_name, preset_name)
+        self.preset_combo.setCurrentIndex(self.preset_combo.findData("平衡"))
+        self.preset_combo.currentIndexChanged.connect(self.load_preset)
+        self.mode_combo = QComboBox()
+        self.mode_combo.addItem("只读监控", "monitor")
+        self.mode_combo.addItem("连续自适应", "continuous")
+        self.mode_combo.currentIndexChanged.connect(self.apply_config)
+        mode_layout.addWidget(QLabel("控制预设"))
+        mode_layout.addWidget(self.preset_combo)
+        mode_layout.addWidget(QLabel("执行方式"))
+        mode_layout.addWidget(self.mode_combo)
+        mode_layout.addWidget(QLabel("目标帧率预算"))
+        self.target_fps_combo = QComboBox()
+        self.target_fps_combo.addItem("原生刷新率", 1)
+        self.target_fps_combo.addItem("刷新率的 1/2", 2)
+        self.target_fps_combo.addItem("刷新率的 1/3", 3)
+        self.target_fps_combo.addItem("刷新率的 1/4", 4)
+        self.target_fps_combo.currentIndexChanged.connect(self.apply_config)
+        mode_layout.addWidget(self.target_fps_combo)
+        target_hint = QLabel("仅改变动态分辨率预算，不是游戏限帧器")
+        target_hint.setWordWrap(True)
+        target_hint.setObjectName("Muted")
+        mode_layout.addWidget(target_hint)
+        self.arm_check = QCheckBox("解锁 SteamVR 设置写入")
+        self.arm_check.stateChanged.connect(self.arm_changed)
+        self.restore_exit_check = QCheckBox("退出时恢复启动值")
+        self.restore_exit_check.setChecked(True)
+        mode_layout.addWidget(self.arm_check)
+        controls_layout.addWidget(self.mode_group)
+
+        self.overlay_group = QGroupBox("VR 参数叠加层")
+        overlay_layout = QVBoxLayout(self.overlay_group)
+        self.overlay_enabled_check = QCheckBox("在头显中显示参数")
+        self.overlay_enabled_check.toggled.connect(self.overlay_enabled_changed)
+        overlay_layout.addWidget(self.overlay_enabled_check)
+        self.overlay_status_label = QLabel("未启用")
+        self.overlay_status_label.setObjectName("Muted")
+        overlay_layout.addWidget(self.overlay_status_label)
+        overlay_hint = QLabel("透明 OSD · 无图表 · 勾选需要显示的参数")
+        overlay_hint.setWordWrap(True)
+        overlay_hint.setObjectName("Muted")
+        overlay_layout.addWidget(overlay_hint)
+        overlay_grid = QGridLayout()
+        overlay_grid.setHorizontalSpacing(10)
+        overlay_grid.setVerticalSpacing(5)
+        self.overlay_field_checks: dict[str, QCheckBox] = {}
+        for index, (field, label) in enumerate(OVERLAY_FIELD_OPTIONS):
+            checkbox = QCheckBox(label)
+            checkbox.setChecked(field in DEFAULT_OVERLAY_FIELDS)
+            checkbox.toggled.connect(self.overlay_fields_changed)
+            self.overlay_field_checks[field] = checkbox
+            overlay_grid.addWidget(checkbox, index // 2, index % 2)
+        overlay_layout.addLayout(overlay_grid)
+        self.overlay_advanced = QWidget()
+        overlay_advanced_layout = QGridLayout(self.overlay_advanced)
+        overlay_advanced_layout.setContentsMargins(0, 4, 0, 0)
+        self.overlay_anchor_combo = QComboBox()
+        self.overlay_anchor_combo.addItem("左上", "upper_left")
+        self.overlay_anchor_combo.addItem("右上", "upper_right")
+        self.overlay_anchor_combo.addItem("左下", "lower_left")
+        self.overlay_anchor_combo.addItem("右下", "lower_right")
+        self.overlay_anchor_combo.currentIndexChanged.connect(self.overlay_config_changed)
+        self.overlay_size_spin = make_spin(70, 140, 100, "%")
+        self.overlay_size_spin.valueChanged.connect(self.overlay_config_changed)
+        overlay_advanced_layout.addWidget(QLabel("头显位置"), 0, 0)
+        overlay_advanced_layout.addWidget(self.overlay_anchor_combo, 0, 1)
+        overlay_advanced_layout.addWidget(QLabel("显示大小"), 1, 0)
+        overlay_advanced_layout.addWidget(self.overlay_size_spin, 1, 1)
+        overlay_layout.addWidget(self.overlay_advanced)
+        controls_layout.addWidget(self.overlay_group)
+
+        self.range_group = QGroupBox("自适应参数")
+        grid = QGridLayout(self.range_group)
+        self.min_spin = make_spin(20, 500, 30, "%")
+        self.max_spin = make_spin(20, 500, 150, "%")
+        self.down_spin = make_spin(1, 20, 1, "%")
+        self.up_spin = make_spin(1, 100, 5, "%")
+        self.cooldown_spin = make_double_spin(0, 60, 8, " s")
+        self.stable_spin = make_double_spin(0, 120, 12, " s")
+        self.up_observation_spin = make_double_spin(0.5, 5.0, 2.0, " s")
+        self.rollback_cooldown_spin = make_double_spin(0, 300, 20.0, " s")
+        self.up_gpu_limit_spin = make_double_spin(50, 100, 92.0, "%")
+        controls_list = [
+            ("最低", self.min_spin),
+            ("最高", self.max_spin),
+            ("降档步长", self.down_spin),
+            ("升档冷却", self.cooldown_spin),
+            ("升档观察", self.stable_spin),
+            ("升档后保护", self.up_observation_spin),
+            ("回退后禁升", self.rollback_cooldown_spin),
+            ("升档 GPU 上限", self.up_gpu_limit_spin),
+        ]
+        for row, (label, widget) in enumerate(controls_list):
+            grid.addWidget(QLabel(label), row, 0)
+            grid.addWidget(widget, row, 1)
+            widget.valueChanged.connect(lambda _value: self.apply_config())
+        self.save_config_button = QPushButton("应用控制参数")
+        self.save_config_button.clicked.connect(self.apply_config)
+        grid.addWidget(self.save_config_button, len(controls_list), 0, 1, 2)
+        self.save_config_button.setVisible(False)
+        controls_layout.addWidget(self.range_group)
+
+        self.manual_group = QGroupBox("手动验证")
+        manual_layout = QVBoxLayout(self.manual_group)
+        self.manual_spin = make_spin(20, 500, 100, "%")
+        self.manual_apply = QPushButton("应用一次")
+        self.manual_apply.setObjectName("Primary")
+        self.manual_apply.clicked.connect(self.manual_apply_clicked)
+        restore_button = QPushButton("恢复面板启动值")
+        restore_button.clicked.connect(self.restore_clicked)
+        manual_layout.addWidget(QLabel("目标分辨率"))
+        manual_layout.addWidget(self.manual_spin)
+        manual_layout.addWidget(self.manual_apply)
+        manual_layout.addWidget(restore_button)
+        self.decision_label = QLabel("等待性能数据")
+        self.decision_label.setWordWrap(True)
+        self.decision_label.setObjectName("Muted")
+        manual_layout.addWidget(self.decision_label)
+        controls_layout.addWidget(self.manual_group)
+
+        self.experiment_group = QGroupBox("30 FPS A/B 调度实验")
+        experiment_layout = QVBoxLayout(self.experiment_group)
+        experiment_hint = QLabel("A：100% 起步预测升档 · B：150% 起步每次缓降 1% · 每轮 30 秒，各做 3 轮")
+        experiment_hint.setWordWrap(True)
+        experiment_hint.setObjectName("Muted")
+        experiment_layout.addWidget(experiment_hint)
+        experiment_buttons = QHBoxLayout()
+        self.experiment_a_button = QPushButton("开始 A 组")
+        self.experiment_b_button = QPushButton("开始 B 组")
+        self.experiment_a_button.clicked.connect(lambda: self.start_experiment("A"))
+        self.experiment_b_button.clicked.connect(lambda: self.start_experiment("B"))
+        experiment_buttons.addWidget(self.experiment_a_button)
+        experiment_buttons.addWidget(self.experiment_b_button)
+        experiment_layout.addLayout(experiment_buttons)
+        self.experiment_progress_bar = QProgressBar()
+        self.experiment_progress_bar.setRange(0, 100)
+        self.experiment_progress_bar.setValue(0)
+        experiment_layout.addWidget(self.experiment_progress_bar)
+        qualification_text = " · 高位缓降已通过本机门槛" if self.high_start_qualified else ""
+        self.experiment_status_label = QLabel(f"A 0/3 · B 0/3 · 等待同场景测试{qualification_text}")
+        self.experiment_status_label.setWordWrap(True)
+        self.experiment_status_label.setObjectName("Muted")
+        experiment_layout.addWidget(self.experiment_status_label)
+        controls_layout.addWidget(self.experiment_group)
+        controls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
+        controls_scroll.setWidget(controls)
+        controls_scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
+        body.addWidget(controls_scroll, 3, Qt.AlignmentFlag.AlignTop)
+        outer.addLayout(body)
+
+        log_card = QFrame()
+        log_card.setObjectName("Card")
+        log_layout = QVBoxLayout(log_card)
+        log_layout.setContentsMargins(12, 10, 12, 12)
+        log_header = QHBoxLayout()
+        log_header.addWidget(QLabel("事件与写入记录"))
+        log_header.addStretch()
+        clear_button = QPushButton("清空")
+        clear_button.clicked.connect(lambda: self.event_log.clear())
+        log_header.addWidget(clear_button)
+        log_layout.addLayout(log_header)
+        self.event_log = QTextEdit()
+        self.event_log.setReadOnly(True)
+        self.event_log.setMinimumHeight(105)
+        log_layout.addWidget(self.event_log)
+        outer.addWidget(log_card, 1)
+
+        self.load_preset("平衡")
+
+    def _start_worker(self) -> None:
+        self.thread = QThread(self)
+        self.worker = MonitorWorker(executable_dir() / "logs")
+        self.worker.moveToThread(self.thread)
+        self.thread.started.connect(self.worker.run)
+        self.worker.snapshot.connect(self.update_snapshot)
+        self.worker.event.connect(self.append_event)
+        self.worker.connection.connect(self.update_connection)
+        self.worker.experiment_progress.connect(self.update_experiment_progress)
+        self.worker.experiment_finished.connect(self.experiment_complete)
+        self.worker.finished.connect(self.thread.quit)
+        self.thread.start()
+        QTimer.singleShot(200, self.apply_config)
+
+    def _restore_overlay_config(self) -> None:
+        raw_fields = self.settings.value("overlay/fields", list(DEFAULT_OVERLAY_FIELDS))
+        if isinstance(raw_fields, str):
+            restored = [field for field in raw_fields.split(",") if field]
+        else:
+            restored = [str(field) for field in raw_fields]
+        if str(self.settings.value("overlay/vrc_context_added", "false")).lower() != "true":
+            if "vrc_context" not in restored:
+                restored.append("vrc_context")
+            self.settings.setValue("overlay/vrc_context_added", True)
+            self.settings.setValue("overlay/fields", restored)
+            self.settings.sync()
+        allowed = {field for field, _label in OVERLAY_FIELD_OPTIONS}
+        restored = [field for field in restored if field in allowed]
+        for field, checkbox in self.overlay_field_checks.items():
+            checkbox.blockSignals(True)
+            checkbox.setChecked(field in restored)
+            checkbox.blockSignals(False)
+        enabled = str(self.settings.value("overlay/enabled", "false")).lower() == "true"
+        self.overlay_enabled_check.blockSignals(True)
+        self.overlay_enabled_check.setChecked(enabled)
+        self.overlay_enabled_check.blockSignals(False)
+        anchor = str(self.settings.value("overlay/anchor", "upper_left"))
+        anchor_index = self.overlay_anchor_combo.findData(anchor)
+        self.overlay_anchor_combo.blockSignals(True)
+        self.overlay_anchor_combo.setCurrentIndex(max(0, anchor_index))
+        self.overlay_anchor_combo.blockSignals(False)
+        try:
+            size_pct = int(self.settings.value("overlay/size_pct", 100))
+        except (TypeError, ValueError):
+            size_pct = 100
+        self.overlay_size_spin.blockSignals(True)
+        self.overlay_size_spin.setValue(max(70, min(140, size_pct)))
+        self.overlay_size_spin.blockSignals(False)
+        self._set_overlay_status("starting" if enabled else "disabled")
+
+    def selected_overlay_fields(self) -> list[str]:
+        return [
+            field
+            for field, _label in OVERLAY_FIELD_OPTIONS
+            if self.overlay_field_checks[field].isChecked()
+        ]
+
+    def overlay_fields_changed(self, _checked: bool = False) -> None:
+        fields = self.selected_overlay_fields()
+        self.settings.setValue("overlay/fields", fields)
+        self.settings.sync()
+        self._send_overlay_settings()
+
+    def overlay_config_changed(self, _value=None) -> None:
+        self.settings.setValue("overlay/anchor", str(self.overlay_anchor_combo.currentData()))
+        self.settings.setValue("overlay/size_pct", self.overlay_size_spin.value())
+        self.settings.sync()
+        self._send_overlay_settings()
+
+    def _send_overlay_settings(self) -> None:
+        if hasattr(self, "worker"):
+            self.worker.submit_overlay_settings(
+                self.selected_overlay_fields(),
+                str(self.overlay_anchor_combo.currentData()),
+                self.overlay_size_spin.value(),
+            )
+
+    def overlay_enabled_changed(self, enabled: bool) -> None:
+        self.settings.setValue("overlay/enabled", bool(enabled))
+        self.settings.sync()
+        self._sync_overlay_process()
+        self._send_overlay_settings()
+
+    def _set_overlay_status(self, state: str, detail: str = "") -> None:
+        labels = {
+            "disabled": "未启用",
+            "starting": "正在启动",
+            "waiting_steamvr": "等待 SteamVR",
+            "waiting_scene": "等待场景",
+            "active": "正常显示",
+            "error": "错误",
+        }
+        self.overlay_state = state
+        text = labels.get(state, state)
+        if detail and state == "error":
+            text += f" · {detail}"
+        self.overlay_status_label.setText(text)
+        self.overlay_status_label.setToolTip(detail)
+        self.overlay_status_label.setStyleSheet(
+            "color:#6FE0B1" if state == "active" else "color:#FF7C91" if state == "error" else "color:#F2C36B" if state != "disabled" else ""
+        )
+
+    def _read_overlay_status(self) -> None:
+        if self.overlay_process is None:
+            return
+        self._overlay_stdout_buffer += bytes(self.overlay_process.readAllStandardOutput()).decode("utf-8", errors="replace")
+        while "\n" in self._overlay_stdout_buffer:
+            line, self._overlay_stdout_buffer = self._overlay_stdout_buffer.split("\n", 1)
+            try:
+                status = json.loads(line)
+            except (TypeError, ValueError):
+                continue
+            if not isinstance(status, dict):
+                continue
+            state = str(status.get("state", "error"))
+            detail = str(status.get("detail", ""))
+            self._set_overlay_status(state, detail)
+            if state == "waiting_scene":
+                QTimer.singleShot(100, self._send_overlay_settings)
+
+    def _overlay_finished(self, exit_code: int, _status) -> None:
+        expected_stop = self._overlay_expected_stop
+        self._overlay_expected_stop = False
+        if self._closing or expected_stop or not self.overlay_enabled_check.isChecked():
+            self._set_overlay_status("disabled")
+            return
+        self._set_overlay_status("error", f"Overlay 进程已退出 ({exit_code})")
+        self.append_event("error", f"VR 叠加层异常退出，代码 {exit_code}")
+
+    def _overlay_process_error(self, _error) -> None:
+        if self._closing or self._overlay_expected_stop or not self.overlay_enabled_check.isChecked():
+            return
+        if self.overlay_process is None:
+            return
+        message = self.overlay_process.errorString()
+        self._set_overlay_status("error", message)
+        self.append_event("error", f"VR 叠加层启动失败: {message}")
+
+    def _ensure_overlay_process(self) -> QProcess:
+        if self.overlay_process is None:
+            process = QProcess(self)
+            process.readyReadStandardOutput.connect(self._read_overlay_status)
+            process.started.connect(lambda: (self._set_overlay_status("starting"), QTimer.singleShot(300, self._send_overlay_settings)))
+            process.finished.connect(self._overlay_finished)
+            process.errorOccurred.connect(self._overlay_process_error)
+            self.overlay_process = process
+        return self.overlay_process
+
+    def _sync_overlay_process(self) -> None:
+        process = self._ensure_overlay_process()
+        if self.overlay_enabled_check.isChecked():
+            if process.state() == QProcess.ProcessState.NotRunning:
+                self._overlay_expected_stop = False
+                script = Path(__file__).with_name("steamvr_overlay.py")
+                process.setWorkingDirectory(str(script.parent))
+                process.setProgram(sys.executable)
+                process.setArguments([str(script)])
+                process.start()
+                self.append_event("info", "VR 参数叠加层已启动；SteamVR 未运行时会自动等待")
+        elif process.state() != QProcess.ProcessState.NotRunning:
+            self._overlay_expected_stop = True
+            process.terminate()
+            if not process.waitForFinished(1200):
+                process.kill()
+                process.waitForFinished(500)
+        else:
+            self._set_overlay_status("disabled")
+
+    def _setup_tray(self) -> None:
+        self.tray = QSystemTrayIcon(self.windowIcon(), self)
+        menu = QMenu()
+        self.show_action = QAction("显示面板", self)
+        self.show_action.triggered.connect(self.showNormal)
+        self.exit_action = QAction("退出", self)
+        self.exit_action.triggered.connect(self.close)
+        menu.addAction(self.show_action)
+        menu.addSeparator()
+        menu.addAction(self.exit_action)
+        self.tray.setContextMenu(menu)
+        self.tray.setToolTip("FramePilot VR")
+        self.tray.activated.connect(lambda reason: self.showNormal() if reason == QSystemTrayIcon.ActivationReason.Trigger else None)
+        self.tray.show()
+
+    def maybe_show_onboarding(self) -> None:
+        value = self.settings.value("onboarding/completed", False)
+        completed = value if isinstance(value, bool) else str(value).strip().lower() in {"1", "true", "yes", "on"}
+        if not completed:
+            self.show_onboarding(force=False)
+
+    def show_onboarding(self, force: bool = False) -> None:
+        if self._closing:
+            return
+        if self.onboarding_dialog is not None and self.onboarding_dialog.isVisible():
+            self.onboarding_dialog.raise_()
+            self.onboarding_dialog.activateWindow()
+            return
+        if not force:
+            value = self.settings.value("onboarding/completed", False)
+            completed = value if isinstance(value, bool) else str(value).strip().lower() in {"1", "true", "yes", "on"}
+            if completed:
+                return
+        self.onboarding_dialog = OnboardingDialog(self)
+        self.onboarding_dialog.finished.connect(lambda _result: setattr(self, "onboarding_dialog", None))
+        self.onboarding_dialog.open()
+
+    def tr(self, chinese: str) -> str:
+        return ZH_EN.get(chinese, chinese) if self.language == "en" else chinese
+
+    def localize_message(self, message: str) -> str:
+        if self.language != "en":
+            return message
+        exact = {
+            "当前设置低于配置下限": "Current setting is below the configured minimum",
+            "当前设置高于配置上限": "Current setting is above the configured maximum",
+            "GPU/交付压力高，但已到分辨率下限": "GPU/delivery pressure is high, but resolution is already at minimum",
+            "GPU 帧时间或重投影超过安全阈值": "GPU frame time or reprojection exceeded the safety threshold",
+            "CPU 受限；降低分辨率通常无效": "CPU-bound; lowering resolution is usually ineffective",
+            "性能余量充足，但已到分辨率上限": "Performance headroom is available, but resolution is already at maximum",
+            "处于滞回区间": "Within the hysteresis band",
+            "系统 GPU 已接近满载；保留余量并禁止升档": "System GPU is near saturation; preserving headroom and blocking resolution increases",
+            "当前没有 VR 场景应用，等待游戏提交画面": "No VR scene application; waiting for the game to submit frames",
+            "尚未取得帧时序；等待场景应用提交画面": "No frame timings yet; waiting for the scene application",
+            "控制参数已更新": "Control parameters updated",
+            "SteamVR 未运行，面板将自动重连": "SteamVR is not running; the panel will reconnect automatically",
+            "等待 SteamVR": "Waiting for SteamVR",
+            "SteamVR 已连接": "SteamVR connected",
+            "连接已断开": "Disconnected",
+            "校准期间场景应用发生变化，已取消": "Scene application changed during calibration; calibration cancelled",
+            "写入锁尚未解锁": "Setting writes are still locked",
+            "当前没有场景应用": "No current scene application",
+            "没有可恢复的启动值": "No startup value is available to restore",
+        }
+        if message in exact:
+            return exact[message]
+        replacements = (
+            ("性能余量已稳定", "Performance headroom stable for"),
+            ("性能余量观察中", "Observing performance headroom"),
+            ("已连接 SteamVR", "Connected to SteamVR"),
+            ("推荐目标", "recommended target"),
+            ("硬件配置", "Hardware profile"),
+            ("场景应用", "Scene application"),
+            ("显式设置", "explicit setting"),
+            ("默认值", "default"),
+            ("检测到外部设置变化", "External setting change detected"),
+            ("控制参数已更新", "Control parameters updated"),
+            ("开始精确阶梯校准", "Started precise stepped calibration"),
+            ("开始只读校准", "Started read-only calibration"),
+            ("个阶段", "stages"),
+            ("校准完成", "Calibration complete"),
+            ("建议", "recommended"),
+            ("检测为 CPU 受限", "CPU-bound detected"),
+            ("校准失败", "Calibration failed"),
+            ("校准阶段切换到", "Calibration stage changed to"),
+            ("取消校准时恢复失败", "Failed to restore while cancelling calibration"),
+            ("无法开始校准", "Unable to start calibration"),
+            ("阶段", "Stage"),
+            ("日志已创建", "Log created"),
+            ("SteamVR 采样失败", "SteamVR sampling failed"),
+            ("已恢复", "restored to"),
+            ("恢复", "Restore"),
+            ("失败", "failed"),
+            ("手动应用", "manual apply"),
+            ("自动应用", "Automatically applied"),
+            ("截图已保存", "Screenshot saved"),
+            ("便携策略已导出", "Portable policy exported"),
+            ("已导入便携策略", "Portable policy imported"),
+            ("读取本机校准失败", "Failed to read local calibration"),
+            ("秒", "s"),
+        )
+        output = message
+        for source, target in replacements:
+            output = output.replace(source, target)
+        return output
+
+    def language_changed(self) -> None:
+        language = str(self.language_combo.currentData())
+        if language not in {"zh", "en"} or language == self.language:
+            return
+        self.language = language
+        self.settings.setValue("language", language)
+        self.retranslate_ui(announce=True)
+
+    def set_advanced_mode(self, enabled: bool, persist: bool = True) -> None:
+        self.advanced_mode = bool(enabled)
+        if self.advanced_check.isChecked() != self.advanced_mode:
+            self.advanced_check.blockSignals(True)
+            self.advanced_check.setChecked(self.advanced_mode)
+            self.advanced_check.blockSignals(False)
+        one_step_index = self.mode_combo.findData("one_step")
+        if self.advanced_mode and one_step_index < 0:
+            self.mode_combo.insertItem(1, self.tr("单步自动调整"), "one_step")
+        elif not self.advanced_mode and one_step_index >= 0:
+            if self.mode_combo.currentData() == "one_step":
+                self.mode_combo.setCurrentIndex(self.mode_combo.findData("monitor"))
+            self.mode_combo.removeItem(one_step_index)
+        self.range_group.setVisible(self.advanced_mode)
+        self.manual_group.setVisible(self.advanced_mode)
+        self.overlay_advanced.setVisible(self.advanced_mode)
+        self.experiment_group.setVisible(self.advanced_mode)
+        self.save_config_button.setVisible(False)
+        if persist:
+            self.settings.setValue("advanced_mode", self.advanced_mode)
+        if hasattr(self, "worker"):
+            self.apply_config()
+
+    def _set_legacy_target(self, target_fps: float) -> None:
+        self.legacy_target_fps = float(target_fps)
+        index = self.target_fps_combo.findData(0)
+        if index < 0:
+            self.target_fps_combo.addItem("", 0)
+            index = self.target_fps_combo.count() - 1
+        self.target_fps_combo.setCurrentIndex(index)
+        self._refresh_target_labels()
+
+    def _refresh_target_labels(self, refresh_hz: float | None = None) -> None:
+        if refresh_hz is None and self.last_snapshot:
+            refresh_hz = float(self.last_snapshot.get("refresh_hz", 0.0))
+        names = {
+            1: "原生刷新率",
+            2: "刷新率的 1/2",
+            3: "刷新率的 1/3",
+            4: "刷新率的 1/4",
+        }
+        for index in range(self.target_fps_combo.count()):
+            divisor = int(self.target_fps_combo.itemData(index))
+            if divisor == 0:
+                prefix = "Legacy custom" if self.language == "en" else "旧策略自定义"
+                text = f"{prefix} · {self.legacy_target_fps:g} FPS"
+            else:
+                text = self.tr(names[divisor])
+                if refresh_hz and refresh_hz > 1:
+                    text += f" · {refresh_hz / divisor:g} FPS"
+            self.target_fps_combo.setItemText(index, text)
+
+    def retranslate_ui(self, announce: bool = False) -> None:
+        def translated(current: str) -> str:
+            chinese = EN_ZH.get(current, current)
+            return ZH_EN.get(chinese, chinese) if self.language == "en" else chinese
+
+        for widget_type in (QLabel, QPushButton, QCheckBox):
+            for widget in self.findChildren(widget_type):
+                widget.setText(translated(widget.text()))
+        for group in self.findChildren(QGroupBox):
+            group.setTitle(translated(group.title()))
+        for index in range(self.preset_combo.count()):
+            data = str(self.preset_combo.itemData(index))
+            self.preset_combo.setItemText(index, self.tr(data) if data in PRESETS or data == "自定义/已迁移" else data)
+        mode_names = {"monitor": "只读监控", "one_step": "单步自动调整", "continuous": "连续自适应"}
+        for index in range(self.mode_combo.count()):
+            self.mode_combo.setItemText(index, self.tr(mode_names[str(self.mode_combo.itemData(index))]))
+        self._refresh_target_labels()
+        if hasattr(self, "show_action"):
+            self.show_action.setText(self.tr("显示面板"))
+            self.exit_action.setText(self.tr("退出"))
+        self.chart.language = self.language
+        self.chart.update()
+        if self.last_snapshot:
+            self.update_snapshot(self.last_snapshot)
+        self.update_connection(*self.connection_state)
+        if announce:
+            message = "Language switched to English" if self.language == "en" else "语言已切换为中文"
+            self.append_event("info", message)
+
+    def _restore_cached_config(self) -> None:
+        if not self.settings.contains("runtime/mode"):
+            return
+
+        def number(key: str, default: float, converter):
+            try:
+                return converter(float(self.settings.value(key, default)))
+            except (TypeError, ValueError):
+                return converter(default)
+
+        def boolean(key: str, default: bool) -> bool:
+            value = self.settings.value(key, default)
+            if isinstance(value, bool):
+                return value
+            return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+        self._loading_controls = True
+        try:
+            preset = str(self.settings.value("runtime/preset", "平衡"))
+            preset_index = self.preset_combo.findData(preset)
+            if preset_index < 0 and preset == "自定义/已迁移":
+                self.preset_combo.addItem(self.tr("自定义/已迁移"), preset)
+                preset_index = self.preset_combo.count() - 1
+            if preset_index >= 0:
+                self.preset_combo.blockSignals(True)
+                self.preset_combo.setCurrentIndex(preset_index)
+                self.preset_combo.blockSignals(False)
+
+            scheduler_revision = number("runtime/scheduler_revision", 0, int)
+            self.min_spin.setValue(number("runtime/min_scale", 30, int))
+            self.max_spin.setValue(number("runtime/max_scale", 150, int))
+            self.down_spin.setValue(1 if scheduler_revision < 1 else number("runtime/step_down", 1, int))
+            self.up_spin.setValue(number("runtime/step_up", 5, int))
+            self.cooldown_spin.setValue(number("runtime/cooldown_seconds", 8.0, float))
+            self.stable_spin.setValue(number("runtime/raise_stable_seconds", 12.0, float))
+            self.policy_window_seconds = number("runtime/window_seconds", 3.0, float)
+            self.policy_evaluate_seconds = 0.25
+            self.policy_gpu_down_ratio = number("runtime/gpu_down_ratio", 0.92, float)
+            self.policy_gpu_raise_ratio = number("runtime/gpu_raise_ratio", 0.72, float)
+            self.policy_cpu_raise_ratio = number("runtime/cpu_raise_ratio", 0.80, float)
+            self.up_observation_spin.setValue(number("runtime/up_observation_seconds", 2.0, float))
+            self.rollback_cooldown_spin.setValue(number("runtime/up_rollback_cooldown_seconds", 20.0, float))
+            self.up_gpu_limit_spin.setValue(number("runtime/up_gpu_limit_pct", 92.0, float))
+
+            divisor = number("runtime/target_divisor", 1, int)
+            legacy_fps = number("runtime/target_fps", 0.0, float)
+            if divisor == 0 and legacy_fps > 0:
+                self._set_legacy_target(legacy_fps)
+            elif divisor in {1, 2, 3, 4}:
+                target_index = self.target_fps_combo.findData(divisor)
+                if target_index >= 0:
+                    self.target_fps_combo.setCurrentIndex(target_index)
+
+            mode = str(self.settings.value("runtime/mode", "monitor"))
+            if mode == "one_step" and self.mode_combo.findData(mode) < 0:
+                self.set_advanced_mode(True, persist=False)
+            mode_index = self.mode_combo.findData(mode)
+            if mode_index >= 0:
+                self.mode_combo.setCurrentIndex(mode_index)
+
+            self.arm_check.blockSignals(True)
+            self.arm_check.setChecked(boolean("runtime/armed", False))
+            self.arm_check.blockSignals(False)
+        finally:
+            self._loading_controls = False
+
+    def _cache_config(self, config: RuntimeConfig) -> None:
+        values = {
+            "scheduler_revision": 1,
+            "preset": str(self.preset_combo.currentData()),
+            "mode": config.mode,
+            "armed": config.armed,
+            "target_divisor": config.target_divisor,
+            "target_fps": config.target_fps,
+            "min_scale": config.min_scale,
+            "max_scale": config.max_scale,
+            "step_down": config.step_down,
+            "step_up": config.step_up,
+            "window_seconds": config.window_seconds,
+            "evaluate_seconds": config.evaluate_seconds,
+            "cooldown_seconds": config.cooldown_seconds,
+            "raise_stable_seconds": config.raise_stable_seconds,
+            "gpu_down_ratio": config.gpu_down_ratio,
+            "gpu_raise_ratio": config.gpu_raise_ratio,
+            "cpu_raise_ratio": config.cpu_raise_ratio,
+            "up_observation_seconds": config.up_observation_seconds,
+            "up_rollback_cooldown_seconds": config.up_rollback_cooldown_seconds,
+            "up_gpu_limit_pct": config.up_gpu_limit_pct,
+        }
+        for key, value in values.items():
+            self.settings.setValue(f"runtime/{key}", value)
+        self.settings.sync()
+
+    def config_from_ui(self) -> RuntimeConfig:
+        target_divisor = int(self.target_fps_combo.currentData())
+        return RuntimeConfig(
+            mode=str(self.mode_combo.currentData()),
+            armed=self.arm_check.isChecked(),
+            target_divisor=target_divisor,
+            target_fps=self.legacy_target_fps if target_divisor == 0 else 0.0,
+            min_scale=self.min_spin.value(),
+            max_scale=self.max_spin.value(),
+            step_down=self.down_spin.value(),
+            step_up=self.up_spin.value(),
+            window_seconds=self.policy_window_seconds,
+            evaluate_seconds=self.policy_evaluate_seconds,
+            cooldown_seconds=self.cooldown_spin.value(),
+            raise_stable_seconds=self.stable_spin.value(),
+            gpu_down_ratio=self.policy_gpu_down_ratio,
+            gpu_raise_ratio=self.policy_gpu_raise_ratio,
+            cpu_raise_ratio=self.policy_cpu_raise_ratio,
+            up_observation_seconds=self.up_observation_spin.value(),
+            up_rollback_cooldown_seconds=self.rollback_cooldown_spin.value(),
+            up_gpu_limit_pct=self.up_gpu_limit_spin.value(),
+            startup_scale=150 if str(self.preset_combo.currentData()) == "激进" and self.high_start_qualified else 0,
+            restore_on_exit=True,
+        ).validated()
+
+    def load_preset(self, _selection=None) -> None:
+        name = str(self.preset_combo.currentData())
+        if name not in PRESETS:
+            return
+        values = PRESETS[name]
+        self._loading_controls = True
+        self.min_spin.setValue(int(values["min_scale"]))
+        self.max_spin.setValue(int(values["max_scale"]))
+        self.down_spin.setValue(int(values["step_down"]))
+        self.up_spin.setValue(int(values["step_up"]))
+        self.cooldown_spin.setValue(float(values["cooldown_seconds"]))
+        self.stable_spin.setValue(float(values["raise_stable_seconds"]))
+        self.policy_gpu_down_ratio = float(values["gpu_down_ratio"])
+        self.policy_gpu_raise_ratio = float(values["gpu_raise_ratio"])
+        self.policy_cpu_raise_ratio = 0.80
+        self.policy_window_seconds = 3.0
+        self.policy_evaluate_seconds = 0.25
+        self._loading_controls = False
+        if hasattr(self, "worker"):
+            self.apply_config()
+
+    def apply_config(self) -> None:
+        if self._loading_controls or not hasattr(self, "worker"):
+            return
+        try:
+            config = self.config_from_ui()
+        except ValueError as exc:
+            QMessageBox.warning(self, "参数错误", str(exc))
+            return
+        self.worker.submit_config(config)
+        self.manual_apply.setEnabled(config.armed)
+        if self._skip_next_cache:
+            self._skip_next_cache = False
+        else:
+            self._cache_config(config)
+
+    def _select_custom_policy(self) -> None:
+        index = self.preset_combo.findData("自定义/已迁移")
+        if index < 0:
+            self.preset_combo.addItem(self.tr("自定义/已迁移"), "自定义/已迁移")
+            index = self.preset_combo.count() - 1
+        self.preset_combo.setCurrentIndex(index)
+
+    def export_policy(self) -> None:
+        try:
+            config = self.config_from_ui()
+        except ValueError as exc:
+            QMessageBox.warning(self, self.tr("参数错误"), str(exc))
+            return
+        path_text, _ = QFileDialog.getSaveFileName(
+            self,
+            "Export portable policy" if self.language == "en" else "导出便携策略",
+            str(Path.home() / "steamvr-adaptive-policy.json"),
+            "JSON policy (*.json)" if self.language == "en" else "JSON 策略 (*.json)",
+        )
+        if not path_text:
+            return
+        path = Path(path_text)
+        if path.suffix.lower() != ".json":
+            path = path.with_suffix(".json")
+        try:
+            StrategyStore.export_portable(path, config, path.stem)
+            self.append_event("success", f"便携策略已导出: {path}")
+            QMessageBox.information(
+                self,
+                "Export complete" if self.language == "en" else "导出完成",
+                (
+                    "Thresholds, steps, and timing windows were exported. The hardware fingerprint and local final resolution were excluded."
+                    if self.language == "en"
+                    else "已导出阈值、步长和时间窗口。硬件指纹与本机最终分辨率未被导出。"
+                ),
+            )
+        except Exception as exc:
+            QMessageBox.warning(self, "Export failed" if self.language == "en" else "导出失败", str(exc))
+
+    def import_policy(self) -> None:
+        path_text, _ = QFileDialog.getOpenFileName(
+            self,
+            "Import portable policy" if self.language == "en" else "导入便携策略",
+            str(Path.home()),
+            "JSON policy (*.json)" if self.language == "en" else "JSON 策略 (*.json)",
+        )
+        if not path_text:
+            return
+        try:
+            imported = StrategyStore.import_portable(Path(path_text), self.config_from_ui())
+            self._loading_controls = True
+            if imported.target_divisor == 0:
+                self._set_legacy_target(imported.target_fps)
+            else:
+                target_index = self.target_fps_combo.findData(int(imported.target_divisor))
+                self.target_fps_combo.setCurrentIndex(target_index)
+            self.min_spin.setValue(imported.min_scale)
+            self.max_spin.setValue(imported.max_scale)
+            self.down_spin.setValue(imported.step_down)
+            self.up_spin.setValue(imported.step_up)
+            self.cooldown_spin.setValue(imported.cooldown_seconds)
+            self.stable_spin.setValue(imported.raise_stable_seconds)
+            self.policy_gpu_down_ratio = imported.gpu_down_ratio
+            self.policy_gpu_raise_ratio = imported.gpu_raise_ratio
+            self.policy_cpu_raise_ratio = imported.cpu_raise_ratio
+            self.policy_window_seconds = imported.window_seconds
+            self.policy_evaluate_seconds = imported.evaluate_seconds
+            self._select_custom_policy()
+            self._loading_controls = False
+            self.arm_check.blockSignals(True)
+            self.arm_check.setChecked(False)
+            self.arm_check.blockSignals(False)
+            self.mode_combo.setCurrentIndex(0)
+            self.apply_config()
+            self.calibration_status.setText(
+                "Policy imported in read-only mode; run local calibration before adopting a resolution range"
+                if self.language == "en"
+                else "策略已迁移；当前保持只读，请在本机运行校准后采用分辨率范围"
+            )
+            self.append_event("success", f"已导入便携策略: {path_text}")
+        except Exception as exc:
+            self._loading_controls = False
+            QMessageBox.warning(self, "Import failed" if self.language == "en" else "导入失败", str(exc))
+
+    def start_calibration(self, precise: bool) -> None:
+        if not self.last_snapshot:
+            QMessageBox.information(
+                self,
+                "Waiting for data" if self.language == "en" else "等待数据",
+                "Enter a VR game and wait for stable frame timings first."
+                if self.language == "en"
+                else "需要先进入 VR 游戏并取得稳定帧时序。",
+            )
+            return
+        if precise:
+            if not self.arm_check.isChecked():
+                QMessageBox.information(
+                    self,
+                    "Writes locked" if self.language == "en" else "写入锁定",
+                    "Unlock SteamVR setting writes before precise stepped calibration."
+                    if self.language == "en"
+                    else "精确阶梯校准需要先解锁 SteamVR 设置写入。",
+                )
+                return
+            answer = QMessageBox.warning(
+                self,
+                "Start precise stepped calibration" if self.language == "en" else "开始精确阶梯校准",
+                (
+                    "Calibration briefly tests the current value, -10%, and +10%, then restores the original value. Keep the same representative scene."
+                    if self.language == "en"
+                    else "校准会短暂测试当前值、-10% 和 +10%，结束后自动恢复原值。请保持在同一代表性场景。"
+                ),
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if answer != QMessageBox.StandardButton.Ok:
+                return
+        self.apply_config()
+        self.worker.submit_calibration(precise, float(self.calibration_duration.value()))
+        self.readonly_calibrate.setEnabled(False)
+        self.precise_calibrate.setEnabled(False)
+        self.calibration_status.setText(
+            "Calibrating; keep the game scene and view as stable as possible"
+            if self.language == "en"
+            else "正在校准；请保持游戏场景与视角尽量稳定"
+        )
+
+    def update_hardware(self, data: dict) -> None:
+        self.hardware_context = data
+        self._profile_key = ""
+
+    def update_calibration_progress(self, data: dict) -> None:
+        self.calibration_progress.setValue(int(data["percent"]))
+        self.calibration_status.setText(self.localize_message(str(data["text"])))
+        if bool(data.get("done", False)):
+            self.readonly_calibrate.setEnabled(True)
+            self.precise_calibrate.setEnabled(True)
+
+    def calibration_complete(self, data: dict) -> None:
+        if "error" in data:
+            self.calibration_progress.setValue(0)
+            prefix = "Calibration failed" if self.language == "en" else "校准失败"
+            self.calibration_status.setText(f"{prefix}: {self.localize_message(str(data['error']))}")
+            self.readonly_calibrate.setEnabled(True)
+            self.precise_calibrate.setEnabled(True)
+            return
+        self.local_store.load()
+        self.calibration_progress.setValue(100)
+        recommended = int(data["recommended_scale"])
+        self.min_spin.setValue(int(data["recommended_min"]))
+        self.max_spin.setValue(int(data["recommended_max"]))
+        self.manual_spin.setValue(recommended)
+        self._select_custom_policy()
+        self.apply_config()
+        if self.language == "en":
+            bound = " (CPU-bound; resolution was not proactively lowered)" if bool(data["cpu_bound"]) else ""
+            precision = "precise steps" if bool(data["precise"]) else "read-only estimate"
+            self.calibration_status.setText(
+                f"Scene calibration complete · {precision} · recommended {recommended}% · "
+                f"range {data['recommended_min']}–{data['recommended_max']}%{bound}"
+            )
+        else:
+            bound = "（CPU 受限，建议未主动降分辨率）" if bool(data["cpu_bound"]) else ""
+            precision = "精确阶梯" if bool(data["precise"]) else "只读估算"
+            self.calibration_status.setText(
+                f"场景校准完成 · {precision} · 建议 {recommended}% · "
+                f"范围 {data['recommended_min']}–{data['recommended_max']}% {bound}"
+            )
+        self.readonly_calibrate.setEnabled(True)
+        self.precise_calibrate.setEnabled(True)
+
+    def arm_changed(self, state: int) -> None:
+        if state and not self._closing:
+            result = QMessageBox.warning(
+                self,
+                "Unlock writes" if self.language == "en" else "解锁写入",
+                (
+                    "Once unlocked, one-step, continuous, and manual modes may change the current game's SteamVR resolutionScale.\n\nObserve in read-only mode first, then validate one step."
+                    if self.language == "en"
+                    else "解锁后，单步、连续和手动模式都可以修改当前游戏的 SteamVR resolutionScale。\n\n建议先使用只读模式观察，再进行单步验证。"
+                ),
+                QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+                QMessageBox.StandardButton.Cancel,
+            )
+            if result != QMessageBox.StandardButton.Ok:
+                self.arm_check.blockSignals(True)
+                self.arm_check.setChecked(False)
+                self.arm_check.blockSignals(False)
+        self.apply_config()
+
+    def start_experiment(self, variant: str) -> None:
+        if not self.last_snapshot:
+            QMessageBox.information(self, "等待 VRChat", "请先进入稳定的 VRChat 场景并取得帧时序。")
+            return
+        if not self.arm_check.isChecked():
+            QMessageBox.information(self, "写入锁定", "A/B 测试会主动修改分辨率，请先解锁 SteamVR 设置写入。")
+            return
+        start_scale = 100 if variant == "A" else 150
+        answer = QMessageBox.warning(
+            self,
+            f"开始 {variant} 组测试",
+            f"本轮固定使用 30 FPS 预算并从 {start_scale}% 开始，持续 30 秒，结束后恢复当前配置和分辨率。\n\n请保持世界、视角和动作不变。",
+            QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer != QMessageBox.StandardButton.Ok:
+            return
+        self.apply_config()
+        self.experiment_a_button.setEnabled(False)
+        self.experiment_b_button.setEnabled(False)
+        self.experiment_progress_bar.setValue(0)
+        self.experiment_status_label.setText(f"{variant} 组准备中…")
+        self.worker.submit_experiment(variant)
+
+    def update_experiment_progress(self, data: dict) -> None:
+        self.experiment_progress_bar.setValue(int(data.get("percent", 0)))
+        if not bool(data.get("done", False)):
+            self.experiment_status_label.setText(
+                f"{data.get('variant', '')} 组第 {data.get('run', 1)} 轮 · {float(data.get('elapsed', 0.0)):.0f}/30 秒"
+            )
+
+    def experiment_complete(self, data: dict) -> None:
+        self.experiment_a_button.setEnabled(True)
+        self.experiment_b_button.setEnabled(True)
+        if "error" in data:
+            self.experiment_status_label.setText(f"测试未完成: {data['error']}")
+            return
+        counts = data.get("counts", {"A": 0, "B": 0})
+        a_count = int(counts.get("A", 0)) if isinstance(counts, dict) else 0
+        b_count = int(counts.get("B", 0)) if isinstance(counts, dict) else 0
+        base = (
+            f"A {a_count}/3 · B {b_count}/3 · 本轮调档峰值 {float(data.get('adjustment_peak_ms', 0.0)):.2f} ms"
+        )
+        if "qualified" in data:
+            qualified = bool(data["qualified"])
+            self.high_start_qualified = qualified
+            self.settings.setValue("experiment/high_start_qualified", qualified)
+            self.settings.sync()
+            verdict = (
+                f"高位缓降已通过：尖峰降低 {float(data.get('peak_reduction_pct', 0.0)):.1f}%，已加入激进预设"
+                if qualified
+                else "高位缓降未达到门槛；继续使用预测升档和 2 秒回退保护"
+            )
+            base += f"\n{verdict}"
+            self.apply_config()
+        self.experiment_status_label.setText(base)
+
+    def manual_apply_clicked(self) -> None:
+        if not self.arm_check.isChecked():
+            QMessageBox.information(
+                self,
+                "Writes locked" if self.language == "en" else "写入锁定",
+                "Enable “Unlock SteamVR setting writes” first."
+                if self.language == "en"
+                else "请先勾选“解锁 SteamVR 设置写入”。",
+            )
+            return
+        current = self.last_snapshot.get("resolution_scale", "—")
+        target = self.manual_spin.value()
+        answer = QMessageBox.question(
+            self,
+            "Apply resolution" if self.language == "en" else "应用分辨率",
+            (
+                f"Change the current scene application from {current}% to {target}%?"
+                if self.language == "en"
+                else f"将当前场景应用从 {current}% 调整为 {target}%？"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.worker.submit_manual_scale(target)
+
+    def restore_clicked(self) -> None:
+        self.worker.submit_restore()
+
+    def update_connection(self, connected: bool, text: str) -> None:
+        self.connection_state = (connected, text)
+        self.connection_label.setText(self.localize_message(text))
+        self.connection_label.setObjectName("StatusGood" if connected else "StatusWait")
+        self.connection_label.style().unpolish(self.connection_label)
+        self.connection_label.style().polish(self.connection_label)
+
+    def update_snapshot(self, data: dict) -> None:
+        self.last_snapshot = data
+        gpu = float(data["gpu_p95_ms"])
+        cpu = float(data["cpu_p95_ms"])
+        budget = float(data["budget_ms"])
+        refresh = float(data["refresh_hz"])
+        target_fps = float(data["target_fps"])
+        scale = int(data["resolution_scale"])
+        sys_gpu = data["system_gpu_pct"]
+        sys_cpu = float(data["system_cpu_pct"])
+        proposed = int(data["proposed_scale"])
+        app_key = str(data["app_key"])
+        render_width = int(data["render_width"])
+        render_height = int(data["render_height"])
+        dimension_ratio = math.sqrt(max(scale, 1) / 100.0)
+        equivalent_width = round(render_width * dimension_ratio)
+        equivalent_height = round(render_height * dimension_ratio)
+
+        self.app_label.setText(app_key)
+        budget_text = "Frame budget" if self.language == "en" else "帧预算"
+        system_cpu_text = "System CPU" if self.language == "en" else "系统 CPU"
+        recommend_text = "Recommended" if self.language == "en" else "建议"
+        writes_text = "writes" if self.language == "en" else "写入"
+        times_text = "" if self.language == "en" else " 次"
+        self._refresh_target_labels(refresh)
+        target_divisor = int(data.get("target_divisor", self.target_fps_combo.currentData()))
+        if self.language == "en":
+            cadence = "native" if target_divisor == 1 else f"1/{target_divisor}" if target_divisor > 1 else "legacy"
+            target_text = f"target {cadence} ({target_fps:g} FPS)"
+        else:
+            cadence = "原生" if target_divisor == 1 else f"1/{target_divisor}" if target_divisor > 1 else "旧策略"
+            target_text = f"目标 {cadence} ({target_fps:g} FPS)"
+        self.gpu_card.set_values(f"{gpu:.2f} ms", f"{budget_text} {budget:.2f} ms · {gpu / budget * 100:.0f}%")
+        self.cpu_card.set_values(f"{cpu:.2f} ms", f"{system_cpu_text} {sys_cpu:.0f}%")
+        self.util_card.set_values("n/a" if sys_gpu is None else f"{float(sys_gpu):.0f}%", "NVIDIA GPU")
+        arrow = "=" if proposed == scale else "→"
+        self.scale_card.set_values(
+            f"{equivalent_width}×{equivalent_height}",
+            f"SteamVR {scale}% · {recommend_text} {arrow} {proposed}%",
+        )
+        base_text = "base" if self.language == "en" else "基准"
+        self.hmd_label.setText(
+            f"{refresh:.0f} Hz · {target_text} · {base_text} {render_width}×{render_height} · "
+            f"{writes_text} {int(data['write_count'])}{times_text}"
+        )
+        current_recommendation = "Current recommendation" if self.language == "en" else "当前建议"
+        self.decision_label.setText(
+            f"{self.localize_message(str(data['reason']))}\n{current_recommendation}: {proposed}%"
+        )
+        if not self.manual_spin.hasFocus():
+            self.manual_spin.setValue(scale)
+        self.chart.add_point(gpu, cpu, budget)
+        if bool(data["write_applied"]):
+            self.append_event("write", f"自动应用 {scale}% · {data['reason']}")
+
+    def append_event(self, level: str, message: str) -> None:
+        colors = {
+            "success": "#6FE0B1",
+            "warning": "#F2C36B",
+            "error": "#FF7C91",
+            "write": "#77AFFF",
+            "info": "#AFC0D5",
+        }
+        color = colors.get(level, "#AFC0D5")
+        stamp = dt.datetime.now().strftime("%H:%M:%S")
+        message = self.localize_message(message)
+        self.event_log.append(
+            f'<span style="color:#60748A">[{stamp}]</span> '
+            f'<span style="color:{color};font-weight:600">{html.escape(level.upper())}</span> '
+            f'<span style="color:#DCE5EF">{html.escape(message)}</span>'
+        )
+
+    def capture_screenshot(self) -> None:
+        if self.screenshot_path is None:
+            return
+        self.screenshot_path.parent.mkdir(parents=True, exist_ok=True)
+        self.grab().save(str(self.screenshot_path))
+        self.append_event("success", f"截图已保存: {self.screenshot_path}")
+
+    def closeEvent(self, event) -> None:  # noqa: N802
+        self._closing = True
+        self.tray.hide()
+        if self.overlay_process is not None and self.overlay_process.state() != QProcess.ProcessState.NotRunning:
+            self._overlay_expected_stop = True
+            self.overlay_process.terminate()
+            if not self.overlay_process.waitForFinished(1200):
+                self.overlay_process.kill()
+                self.overlay_process.waitForFinished(500)
+        self.worker.stop()
+        self.thread.quit()
+        if not self.thread.wait(6000):
+            self.thread.quit()
+            self.thread.wait(1000)
+        event.accept()
+
+
+def make_spin(minimum: int, maximum: int, value: int, suffix: str) -> QSpinBox:
+    widget = QSpinBox()
+    widget.setRange(minimum, maximum)
+    widget.setValue(value)
+    widget.setSuffix(suffix)
+    return widget
+
+
+def make_double_spin(minimum: float, maximum: float, value: float, suffix: str) -> QDoubleSpinBox:
+    widget = QDoubleSpinBox()
+    widget.setRange(minimum, maximum)
+    widget.setValue(value)
+    widget.setDecimals(1)
+    widget.setSingleStep(1.0)
+    widget.setSuffix(suffix)
+    return widget
+
+
+def make_icon() -> QIcon:
+    pixmap = QPixmap(64, 64)
+    pixmap.fill(Qt.GlobalColor.transparent)
+    painter = QPainter(pixmap)
+    painter.setRenderHint(QPainter.RenderHint.Antialiasing)
+    painter.setBrush(QColor("#1677FF"))
+    painter.setPen(Qt.PenStyle.NoPen)
+    painter.drawRoundedRect(QRectF(4, 4, 56, 56), 15, 15)
+    painter.setPen(QPen(QColor("#FFFFFF"), 4))
+    painter.drawLine(QPointF(16, 38), QPointF(26, 27))
+    painter.drawLine(QPointF(26, 27), QPointF(36, 34))
+    painter.drawLine(QPointF(36, 34), QPointF(49, 18))
+    painter.end()
+    return QIcon(pixmap)
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="FramePilot VR desktop panel")
+    parser.add_argument("--screenshot", type=Path)
+    parser.add_argument("--auto-close", type=float, default=0.0)
+    parser.add_argument("--language", choices=("zh", "en"), help="临时覆盖界面语言")
+    parser.add_argument("--target-divisor", type=int, choices=(1, 2, 3, 4), help="临时设置头显刷新率分频")
+    parser.add_argument("--target-fps", type=float, help="高级兼容项：临时设置绝对 FPS 预算")
+    return parser.parse_args()
+
+
+def main() -> int:
+    args = parse_args()
+    app = QApplication(sys.argv[:1])
+    app.setApplicationName("FramePilot VR")
+    app.setApplicationVersion(APP_VERSION)
+    app.setQuitOnLastWindowClosed(True)
+    app.setStyleSheet(STYLE)
+    window = MainWindow(
+        screenshot_path=args.screenshot,
+        auto_close=args.auto_close,
+        language_override=args.language,
+        target_divisor_override=args.target_divisor,
+        target_fps_override=args.target_fps,
+    )
+    window.show()
+    return app.exec()
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

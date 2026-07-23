@@ -1,0 +1,167 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>FramePilot VR · 快速开始 / Quick Start</title>
+  <style>
+    :root { color-scheme: dark; --bg:#0b1017; --card:#111923; --line:#26384c; --text:#e8edf4; --muted:#9dafc3; --blue:#3a8cff; --green:#6fe0b1; --amber:#f2c36b; }
+    * { box-sizing: border-box; }
+    body { margin:0; background:var(--bg); color:var(--text); font:16px/1.65 "Segoe UI","Microsoft YaHei UI",sans-serif; }
+    main { max-width:1180px; margin:auto; padding:34px 22px 60px; }
+    header { padding:24px 26px; border:1px solid var(--line); border-radius:16px; background:linear-gradient(135deg,#142236,#101821); }
+    h1 { margin:0 0 8px; font-size:30px; line-height:1.25; }
+    h2 { margin:0 0 14px; font-size:21px; }
+    h3 { margin:22px 0 8px; font-size:17px; color:#fff; }
+    p { margin:8px 0; }
+    .lead { color:var(--muted); margin:0; }
+    .important { margin-top:18px; padding:12px 15px; border-left:4px solid var(--amber); background:#292313; border-radius:7px; }
+    .grid { display:grid; grid-template-columns:1fr 1fr; gap:18px; margin-top:18px; }
+    .card { padding:22px 24px; background:var(--card); border:1px solid var(--line); border-radius:14px; }
+    .lang { display:inline-block; margin-bottom:10px; padding:3px 10px; border:1px solid #365a7b; border-radius:999px; color:#9dc9ff; font-size:13px; }
+    ol,ul { margin:8px 0 8px 22px; padding:0; }
+    li { margin:7px 0; }
+    code { padding:2px 6px; background:#09101a; border:1px solid #243447; border-radius:5px; font-family:"Cascadia Mono",Consolas,monospace; }
+    .safe { color:var(--green); font-weight:650; }
+    .warn { color:var(--amber); font-weight:650; }
+    footer { margin-top:20px; text-align:center; color:var(--muted); font-size:14px; }
+    @media (max-width:820px) { .grid { grid-template-columns:1fr; } main { padding:18px 12px 40px; } header,.card { padding:18px; } }
+    @media print { body { color:#111; background:#fff; } .card,header { background:#fff; border-color:#bbb; } .lead,footer { color:#444; } code { background:#eee; border-color:#ccc; } }
+  </style>
+</head>
+<body>
+<main>
+  <header>
+    <h1>FramePilot VR</h1>
+    <p class="lead">收件人快速开始 / Recipient Quick Start · Windows x64 · v0.6.0</p>
+    <div class="important"><strong>请先解压整个 ZIP。</strong>不要只复制 EXE，也不要直接在压缩包内运行。<br><strong>Extract the entire ZIP first.</strong> Do not copy only the EXE or run it from inside the archive.</div>
+  </header>
+
+  <section class="grid">
+    <article class="card">
+      <span class="lang">中文</span>
+      <h2>1. 运行条件</h2>
+      <ul>
+        <li>Windows 10/11 64 位。</li>
+        <li>已安装并能正常运行 SteamVR。</li>
+        <li>头显已通过原厂软件或串流软件连接。</li>
+        <li>运行一个 SteamVR 游戏；无需安装 Python。</li>
+        <li>NVIDIA GPU 可显示系统 GPU 占用率；AMD/Intel 可能显示 <code>n/a</code>，但 SteamVR 帧时间仍可读取。</li>
+      </ul>
+
+      <h2>2. 第一次启动</h2>
+      <ol>
+        <li>把 ZIP 解压到桌面、文档或其他可写目录。</li>
+        <li>依次启动头显软件、SteamVR 和 VR 游戏。</li>
+        <li>双击 <code>start_panel.bat</code>；也可以直接运行 <code>FramePilotVR.exe</code>。</li>
+        <li>在面板顶部选择“中文”。</li>
+        <li>确认执行方式为“只读监控”，写入锁未勾选。</li>
+        <li>选择原生刷新率，或刷新率的 1/2、1/3、1/4；72 Hz 会自动对应 72/36/24/18 FPS 预算。</li>
+      </ol>
+
+      <h2>3. 推荐使用顺序</h2>
+      <ol>
+        <li><span class="safe">先只读：</span>观察 GPU P95、CPU P95、帧预算和建议值。</li>
+        <li>在代表性游戏场景中运行 45–90 秒“只读校准”。</li>
+        <li>若要验证动态修改，打开“高级模式”，先勾选写入解锁，再使用“单步自动调整”。</li>
+        <li>确认游戏能在运行中响应后，才考虑“精确阶梯”或“连续自适应”。</li>
+      </ol>
+
+      <h2>4. 安全提示</h2>
+      <ul>
+        <li>默认只读，不会修改 SteamVR。</li>
+        <li>精确阶梯会测试当前值、-10% 和 +10%，结束时恢复原值。</li>
+        <li>面板退出时始终恢复启动值；该安全项不再暴露为可关闭选项。</li>
+        <li>部分游戏只有重启后才读取新的分辨率。</li>
+        <li><b>刷新率分频只是动态分辨率预算，不是游戏限帧器。</b>实际帧率仍由游戏和 SteamVR 重投影决定。</li>
+        <li>普通模式只显示核心操作；阈值、步长、上下限、单步、精确校准、策略迁移和手动设置位于高级模式。</li>
+      </ul>
+    </article>
+
+    <article class="card">
+      <span class="lang">English</span>
+      <h2>1. Requirements</h2>
+      <ul>
+        <li>64-bit Windows 10 or Windows 11.</li>
+        <li>SteamVR installed and working normally.</li>
+        <li>A headset connected through its vendor software or streaming software.</li>
+        <li>A SteamVR game running; Python is not required.</li>
+        <li>NVIDIA GPUs expose system GPU usage. AMD/Intel may show <code>n/a</code>, while SteamVR frame timing still works.</li>
+      </ul>
+
+      <h2>2. First launch</h2>
+      <ol>
+        <li>Extract the ZIP to Desktop, Documents, or another writable folder.</li>
+        <li>Start the headset software, SteamVR, and then the VR game.</li>
+        <li>Double-click <code>start_panel.bat</code>, or run <code>FramePilotVR.exe</code> directly.</li>
+        <li>Select “English” from the language menu at the top.</li>
+        <li>Confirm that “Read-only monitor” is selected and setting writes are locked.</li>
+        <li>Select the native refresh rate or 1/2, 1/3, or 1/4 of it. At 72 Hz these become 72/36/24/18 FPS budgets automatically.</li>
+      </ol>
+
+      <h2>3. Recommended workflow</h2>
+      <ol>
+        <li><span class="safe">Start read-only:</span> inspect GPU P95, CPU P95, frame budget, and the recommendation.</li>
+        <li>Run “Read-only calibration” for 45–90 seconds in a representative scene.</li>
+        <li>To validate live changes, enable “Advanced mode,” unlock writes, and try “One-step adjustment” first.</li>
+        <li>Use “Precise steps” or “Continuous adaptive” only after the game responds correctly at runtime.</li>
+      </ol>
+
+      <h2>4. Safety notes</h2>
+      <ul>
+        <li>The default mode is read-only and does not modify SteamVR.</li>
+        <li>Precise calibration tests the current value, -10%, and +10%, then restores the original value.</li>
+        <li>The panel always restores the startup value on exit; this safety behavior can no longer be disabled in the UI.</li>
+        <li>Some games only read a new resolution after restarting.</li>
+        <li><b>Refresh-rate division changes the dynamic-resolution budget; it is not a game frame limiter.</b> Actual frame rate still depends on the game and SteamVR reprojection.</li>
+        <li>Basic mode shows core controls only. Thresholds, steps, range, one-step mode, precise calibration, policy migration, and manual controls are under Advanced mode.</li>
+      </ul>
+    </article>
+  </section>
+
+  <section class="grid">
+    <article class="card">
+      <span class="lang">中文</span>
+      <h2>迁移、日志与故障排查</h2>
+      <h3>发送给其他人</h3>
+      <p>发送完整 ZIP。不要发送程序运行后生成的个人日志。便携策略可以通过面板“导出策略”单独发送，它不包含硬件指纹和本机最终分辨率。</p>
+      <p>旧版固定 FPS 策略仍可导入，并在高级模式中显示为“旧策略自定义”；新策略推荐保存刷新率分频，因此换头显刷新率后会自动适配。</p>
+      <h3>文件位置</h3>
+      <ul>
+        <li>运行日志：程序目录下的 <code>logs</code>。</li>
+        <li>本机校准：<code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\strategy-store.json</code>。</li>
+      </ul>
+      <h3>常见问题</h3>
+      <ul>
+        <li><b>等待 SteamVR：</b>确认 <code>vrserver.exe</code> 正在运行。</li>
+        <li><b>等待场景应用：</b>进入 VR 游戏，而不是只停留在 SteamVR Home。</li>
+        <li><b>系统 GPU 为 n/a：</b>不影响 SteamVR GPU 帧时间控制。</li>
+        <li><b>Windows SmartScreen：</b>这是未签名的自建程序。仅在来源可信且校验值一致时选择“更多信息 → 仍要运行”，不要关闭杀毒软件。</li>
+      </ul>
+    </article>
+
+    <article class="card">
+      <span class="lang">English</span>
+      <h2>Migration, logs, and troubleshooting</h2>
+      <h3>Sharing with another person</h3>
+      <p>Send the complete ZIP. Do not include personal logs generated after running the program. A portable policy may be exported separately; it excludes the hardware fingerprint and local final resolution.</p>
+      <p>Older fixed-FPS policies remain importable and appear as “Legacy custom” in Advanced mode. New policies should use refresh-rate division so they adapt automatically to another HMD refresh rate.</p>
+      <h3>File locations</h3>
+      <ul>
+        <li>Runtime logs: <code>logs</code> beside the application.</li>
+        <li>Local calibration: <code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\strategy-store.json</code>.</li>
+      </ul>
+      <h3>Common issues</h3>
+      <ul>
+        <li><b>Waiting for SteamVR:</b> verify that <code>vrserver.exe</code> is running.</li>
+        <li><b>Waiting for scene application:</b> enter a VR game instead of remaining only in SteamVR Home.</li>
+        <li><b>System GPU shows n/a:</b> SteamVR GPU frame-time control still works.</li>
+        <li><b>Windows SmartScreen:</b> this is an unsigned locally built app. Use “More info → Run anyway” only when the source is trusted and the checksum matches. Do not disable antivirus protection.</li>
+      </ul>
+    </article>
+  </section>
+
+  <footer>Keep this file with the application folder · 请将本文件与程序目录放在一起</footer>
+</main>
+</body>
+</html>

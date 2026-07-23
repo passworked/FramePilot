@@ -1,0 +1,4 @@
+openvr==2.12.1401
+psutil==7.2.2
+PySide6==6.9.2
+pyinstaller==6.21.0

@@ -1,0 +1,15 @@
+__pycache__/
+*.py[cod]
+.venv/
+build/
+build-panel/
+dist/
+*.spec
+logs/
+diag-logs/
+screenshots/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+*.log
+

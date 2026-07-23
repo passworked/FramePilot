@@ -1,0 +1,21 @@
+This proof of concept bundles the following third-party components:
+
+- OpenVR Python bindings (openvr 2.12.1401) and the OpenVR API library.
+  Project: https://github.com/cmbruns/pyopenvr
+  License metadata: BSD-3-Clause.
+
+- psutil 7.2.2.
+  Project: https://github.com/giampaolo/psutil
+  License: BSD-3-Clause.
+
+- PySide6 / Qt for Python 6.9.2.
+  Project: https://doc.qt.io/qtforpython-6/
+  License options include LGPL-3.0-only, GPL-3.0-only, or commercial terms.
+
+- Python 3.12 runtime components.
+  Project: https://www.python.org/
+  License: Python Software Foundation License.
+
+- PyInstaller 6.21.0 bootloader.
+  Project: https://pyinstaller.org/
+  License: GPL-2.0-or-later with the PyInstaller bootloader exception.

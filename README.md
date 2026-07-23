@@ -1,0 +1,119 @@
+# FramePilot VR v0.6
+
+这是一个 Windows / SteamVR 动态分辨率可行性验证面板。它读取 OpenVR 帧时序、系统 CPU 与 NVIDIA GPU 占用率，按当前头显刷新率计算帧预算，并为当前场景应用建议或调整 `resolutionScale`。桌面面板与 CLI PoC 共用 `steamvr_core.py`，控制逻辑和写入保护一致。
+
+> 发给其他人时请发送完整 ZIP，并让收件人先打开 `START_HERE.html`。必须完整解压，不能只复制 EXE，也不要直接在压缩包内运行。
+>
+> When sharing, send the complete ZIP and ask the recipient to open `START_HERE.html` first. Extract everything before running; do not send only the EXE.
+
+## 快速开始
+
+1. 启动头显串流软件、SteamVR 和 VR 游戏。
+2. 双击 `start_panel.bat`。
+3. 默认是“平衡 + 只读监控”，不会修改 SteamVR。
+4. 先观察 GPU P95 与帧预算，再运行“只读校准”。
+5. 需要验证热更新时，勾选“解锁 SteamVR 设置写入”；“单步自动调整”和“精确阶梯校准”位于高级模式。
+
+面板提供：
+
+- 当前游戏、GPU/CPU P95 帧时间、系统 CPU/GPU 占用率和趋势图。
+- 顶部“中文 / English”运行时切换；选择会保存，下次启动自动沿用。
+- 可选择原生刷新率或刷新率的 1/2、1/3、1/4 作为动态分辨率帧预算目标。
+- 保守、平衡、激进三套控制预设。
+- 普通模式提供只读和连续自适应；高级模式额外提供单步调整。
+- 便携策略 JSON 导入/导出，以及机器本地校准数据库。
+- 只读估算校准和需要明确解锁的三阶段精确校准。
+- 高级模式提供手动设置与恢复启动值；退出时始终恢复，另有 CSV 日志和托盘入口。
+
+## 界面参数分层
+
+**普通用户直接可见：**控制预设、只读/连续模式、原生或 1/2–1/4 分频、写入解锁、只读校准。这些足以完成日常选择和安全启停。
+
+**高级模式：**分辨率上下限、升降步长、稳定窗口、冷却时间、单步调整、精确阶梯校准、便携策略导入/导出和手动分辨率。它们适合调试机器差异与控制器响应。
+
+**从前端软删除：**固定 90/72/60/45/30 FPS、单独的“应用控制参数”按钮、可关闭的“退出时恢复”选项。绝对 FPS 仍可由旧策略或 CLI `--target-fps` 使用；退出恢复在 GUI 中强制启用。
+
+## 跨机器迁移与配置差异
+
+v0.3 将配置分成两层：
+
+1. **便携策略**：可导出的阈值、步长、时间窗口和上下限。导入时强制切回只读，不继承写入权限。
+2. **本机校准**：按电脑名、GPU、头显型号、刷新率、SteamVR 推荐渲染尺寸和游戏应用键生成硬件指纹，保存建议分辨率范围。
+
+因此另一台机器可以迁移控制策略，但不会直接套用原机器的最终分辨率。GPU、头显、刷新率或 SteamVR 渲染尺寸变化时会形成新的硬件 ID；旧校准不会自动命中，需要在新配置上重新校准。
+
+本机校准数据库位于：
+
+```text
+%LOCALAPPDATA%\SteamVRAdaptiveResolution\strategy-store.json
+```
+
+这个文件不会被“导出策略”带走。
+
+## 两种校准
+
+- **只读校准**：保持当前分辨率采样，按 GPU 帧预算做比例估算；不需要解锁，不写 SteamVR。
+- **精确阶梯校准**：依次采样当前值、-10% 和 +10%，拟合 GPU 帧时间与分辨率负载的关系；需要先解锁，结束或取消时恢复原值。
+
+校准应在同一个有代表性的游戏场景中进行，尽量保持视角和负载稳定。检测为 CPU 受限时不会用降低分辨率作为主要建议。
+
+## 刷新率分频预算
+
+面板读取当前头显刷新率，再选择原生、1/2、1/3 或 1/4 档位。例如 72 Hz 对应 72、36、24、18 FPS 的预算，帧时间分别约为 13.89、27.78、41.67、55.56 ms；90 Hz 则自动对应 90、45、30、22.5 FPS。分频选择会随便携策略导入/导出，换头显或切换刷新率时无需重填固定数字。
+
+这不是游戏限帧器，也不会修改 SteamVR 头显刷新率。它只改变动态分辨率控制器允许的 GPU 帧时间；实际呈现帧率仍由游戏、SteamVR 调度和重投影决定。低分频会增加运动延迟和伪影风险，应结合舒适度、重投影和实际交付帧率判断。
+
+## 中英文切换
+
+在面板顶部语言下拉框选择“中文”或“English”即可立即切换，不需要重启。控件、状态、提示框、性能建议、校准状态和切换后新产生的事件日志都会使用所选语言。已有日志记录保持生成时的语言，便于保留原始上下文。
+
+## 安全设计
+
+- 默认只读；导入策略后也强制只读。
+- CLI `--apply` 每次运行最多自动写入一次；只有同时指定 `--continuous-apply` 才连续调整。
+- GUI 的手动、单步、连续和精确校准都要求先确认解锁。
+- 只修改当前场景应用节下的 `resolutionScale`，不修改头显串流编码分辨率或码率。
+- 精确校准会记录原值，并在结束或面板退出时恢复。
+
+## CLI
+
+```text
+FramePilotVRCLI.exe --help
+FramePilotVRCLI.exe --duration 60
+FramePilotVRCLI.exe --apply
+FramePilotVRCLI.exe --apply --continuous-apply
+FramePilotVRCLI.exe --target-divisor 2 --duration 60
+FramePilotVRCLI.exe --target-divisor 3 --duration 60
+FramePilotVRCLI.exe --target-fps 30 --duration 60
+FramePilotVRCLI.exe --export-policy policy.json
+FramePilotVRCLI.exe --import-policy policy.json --duration 60
+FramePilotVRCLI.exe --self-test
+```
+
+导入策略在 CLI 中同样强制只读。日志保存在程序旁边的 `logs` 目录。
+
+## 控制逻辑
+
+- 默认使用头显原生刷新率预算，也可选择 1/2、1/3 或 1/4 分频；CLI 仍保留绝对 FPS 兼容入口。
+- GPU P95 超过安全阈值，或 GPU 压力较高且出现丢帧/重投影时降档。
+- NVIDIA 系统 GPU 占用率达到 97% 时禁止升分辨率，避免在已满载状态下继续撞 GPU 瓶颈。
+- CPU P95 超预算而 GPU 明显空闲时判断为 CPU 受限并保持分辨率。
+- GPU 与 CPU 持续有余量且交付稳定时逐步升档。
+- 使用时间窗口、滞回与冷却避免频繁抖动。
+
+## 重要限制
+
+SteamVR 接受 `resolutionScale` 写入，不代表每款游戏都一定会立即重建渲染纹理；部分游戏可能只在重启时读取设置。面板能证明设置和负载趋势发生变化，但固定场景的长时间 A/B 测试仍是启用连续写入前的必要步骤。
+
+## 源码依赖
+
+- Python 3.12+
+- `openvr`
+- `psutil`
+- `PySide6`
+
+打包版本已包含运行依赖。系统 GPU 百分比通过 NVIDIA `nvidia-smi` 读取；不可用时显示 `n/a`，SteamVR GPU 帧时间仍可正常工作。
+
+## 已完成的本机验证
+
+已在 SteamVR、PICO 4S、90 Hz 和 VRChat `steam.app.438100` 上验证 OpenVR 连接、帧时序读取、按应用设置读取与可恢复的 A/B 写入。VRChat 当前测试基线为 40%；v0.3 的构建与面板截图测试保持只读，不改变该值。
