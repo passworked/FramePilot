@@ -69,6 +69,19 @@ class ApplicationFramerateTests(unittest.TestCase):
         self.assertEqual(label, "HMD REFRESH")
         self.assertEqual(value, "72 Hz")
 
+    def test_osd_marks_dashboard_guard_as_frozen(self) -> None:
+        data = {
+            "resolution_scale": 81,
+            "proposed_scale": 81,
+            "decision": "hold",
+            "adaptive_frozen_reason": "SteamVR Dashboard/桌面面板可见",
+        }
+
+        label, value, _color = overlay_rows(data, ["decision"])[0]
+
+        self.assertEqual(label, "SCHEDULER")
+        self.assertEqual(value, "FROZEN  81% > 81%")
+
 
 if __name__ == "__main__":
     unittest.main()

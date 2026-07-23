@@ -42,6 +42,8 @@ TARGET_CHANGE_CADENCE_SECONDS = 0.75
 TARGET_CHANGE_TIMEOUT_SECONDS = 20.0
 GPU_SOFT_CAP_STEP = 10
 GPU_SATURATED_SOFT_CAP_STEP = 5
+DASHBOARD_RECOVERY_STABLE_SECONDS = 1.0
+DASHBOARD_RECOVERY_WINDOW_RATIO = 0.90
 PORTABLE_CONFIG_FIELDS = (
     "target_divisor",
     "target_fps",
@@ -103,6 +105,89 @@ class Decision:
     action: str
     proposed_scale: int
     reason: str
+
+
+class DashboardDecisionGuard:
+    """Keep dashboard-throttled frame timings out of adaptive decisions."""
+
+    def __init__(self) -> None:
+        self.mode = "ready"
+        self.stable_since: float | None = None
+        self.last_cadence: tuple[float, float] | None = None
+
+    def observe_status(self, visible: bool | None, now: float) -> tuple[str, str]:
+        previous = self.mode
+        if visible is True:
+            self.mode = "visible"
+            self.stable_since = None
+            self.last_cadence = None
+        elif visible is None:
+            self.mode = "unavailable"
+            self.stable_since = None
+            self.last_cadence = None
+        elif self.mode in {"visible", "unavailable"}:
+            self.mode = "recovering"
+            self.stable_since = None
+            self.last_cadence = None
+        return previous, self.mode
+
+    def freeze_reason(
+        self,
+        window: list[FrameSample],
+        application_fps: float,
+        stats: WindowStats,
+        now: float,
+        window_seconds: float,
+    ) -> str:
+        if self.mode == "visible":
+            return "SteamVR Dashboard/桌面面板可见；自适应分辨率已冻结"
+        if self.mode == "unavailable":
+            return "无法可靠读取 SteamVR Dashboard 状态；为安全起见冻结自适应分辨率"
+        if self.mode != "recovering":
+            return ""
+
+        coverage = 0.0
+        if len(window) >= 2:
+            timestamps = [sample.timestamp for sample in window]
+            coverage = max(0.0, max(timestamps) - min(timestamps))
+        required_coverage = max(
+            0.5,
+            window_seconds * DASHBOARD_RECOVERY_WINDOW_RATIO,
+        )
+        if coverage < required_coverage:
+            self.stable_since = None
+            self.last_cadence = None
+            return (
+                "SteamVR Dashboard 已隐藏；等待新的帧时序统计窗口"
+                f"（{coverage:.1f}/{required_coverage:.1f} 秒）"
+            )
+
+        cadence = (application_fps, stats.interval_p95_ms)
+        if self.last_cadence is None:
+            self.last_cadence = cadence
+            self.stable_since = now
+        else:
+            previous_fps, previous_interval = self.last_cadence
+            fps_stable = abs(application_fps - previous_fps) <= max(2.0, previous_fps * 0.12)
+            interval_stable = abs(stats.interval_p95_ms - previous_interval) <= max(
+                2.0,
+                previous_interval * 0.15,
+            )
+            self.last_cadence = cadence
+            if not (fps_stable and interval_stable):
+                self.stable_since = now
+
+        stable_for = 0.0 if self.stable_since is None else now - self.stable_since
+        if stable_for < DASHBOARD_RECOVERY_STABLE_SECONDS:
+            return (
+                "SteamVR Dashboard 已隐藏；等待帧节拍稳定"
+                f"（{stable_for:.1f}/{DASHBOARD_RECOVERY_STABLE_SECONDS:.1f} 秒）"
+            )
+
+        self.mode = "ready"
+        self.stable_since = None
+        self.last_cadence = None
+        return ""
 
 
 @dataclass
@@ -411,6 +496,8 @@ class TelemetrySnapshot:
     recovery_peak_reprojection_pct: float
     recovery_dropped: int
     recovery_mispresented: int
+    dashboard_visible: bool | None
+    adaptive_frozen_reason: str
 
     def as_dict(self) -> dict[str, object]:
         return {
@@ -471,6 +558,8 @@ class TelemetrySnapshot:
             "recovery_peak_reprojection_pct": self.recovery_peak_reprojection_pct,
             "recovery_dropped": self.recovery_dropped,
             "recovery_mispresented": self.recovery_mispresented,
+            "dashboard_visible": self.dashboard_visible,
+            "adaptive_frozen_reason": self.adaptive_frozen_reason,
         }
 
 
@@ -802,6 +891,7 @@ class SteamVRSession:
         self.compositor = None
         self.applications = None
         self.settings = None
+        self.overlay = None
 
     def connect(self) -> None:
         openvr.init(openvr.VRApplication_Background)
@@ -809,6 +899,10 @@ class SteamVRSession:
         self.compositor = openvr.VRCompositor()
         self.applications = openvr.VRApplications()
         self.settings = openvr.VRSettings()
+        try:
+            self.overlay = openvr.VROverlay()
+        except Exception:
+            self.overlay = None
 
     def close(self) -> None:
         try:
@@ -868,6 +962,21 @@ class SteamVRSession:
         assert self.settings is not None
         self.settings.setInt32(app_key, RESOLUTION_KEY, int(scale))
 
+    def dashboard_visible(self) -> bool | None:
+        """Return Dashboard visibility, or None when OpenVR cannot answer safely."""
+        if self.overlay is None:
+            try:
+                self.overlay = openvr.VROverlay()
+            except Exception:
+                return None
+        try:
+            return bool(self.overlay.isDashboardVisible())
+        except Exception:
+            # Reacquire the interface on a later poll in case SteamVR replaced
+            # its function table during a compositor/dashboard restart.
+            self.overlay = None
+            return None
+
     def frame_batch(self, count: int = 128) -> list[FrameSample]:
         assert self.compositor is not None
         timing_array = (openvr.Compositor_FrameTiming * count)()
@@ -916,6 +1025,8 @@ class AdaptiveRuntime:
         self.config = (config or RuntimeConfig()).validated()
         self.session = SteamVRSession()
         self.controller = AdaptiveController()
+        self.dashboard_guard = DashboardDecisionGuard()
+        self.dashboard_visible: bool | None = None
         self.gpu_sampler = GpuUtilizationSampler()
         self.history: deque[FrameSample] = deque(maxlen=1024)
         self.connected = False
@@ -1062,6 +1173,37 @@ class AdaptiveRuntime:
                 self._write_scale(target, "激进预设高位起步，随后缓慢下探", "startup")
         else:
             self.emit("warning", "当前没有 VR 场景应用，等待游戏提交画面")
+
+    def _update_dashboard_guard(self, now: float) -> None:
+        reader = getattr(self.session, "dashboard_visible", None)
+        # Optional/simulated providers predating this capability keep their
+        # established behavior. A provider that implements the capability but
+        # cannot read it returns None and gets the fail-safe freeze.
+        visible: bool | None = False
+        if callable(reader):
+            try:
+                visible = reader()
+            except Exception:
+                visible = None
+        self.dashboard_visible = visible if callable(reader) else None
+        previous, current = self.dashboard_guard.observe_status(visible, now)
+        was_protected = previous != "ready"
+        is_protected = current != "ready"
+        entering_protection = is_protected and not was_protected
+        starting_recovery = current == "recovering" and previous != "recovering"
+        if entering_protection or starting_recovery:
+            self.history.clear()
+            self.controller.reset()
+            if self.pending_target_raise is not None:
+                self.pending_target_raise["matched_since"] = None
+        if previous == current:
+            return
+        if current == "visible":
+            self.emit("info", "SteamVR Dashboard/桌面面板已显示；冻结自适应分辨率")
+        elif current == "unavailable":
+            self.emit("warning", "SteamVR Dashboard 状态读取失败；冻结自适应分辨率")
+        elif current == "recovering":
+            self.emit("info", "SteamVR Dashboard 已隐藏；等待新统计窗口与帧节拍稳定")
 
     def _update_vrc_context(self, app_key: str, now: float) -> None:
         if app_key.casefold() != "steam.app.438100":
@@ -1356,6 +1498,7 @@ class AdaptiveRuntime:
         if not app_key:
             return None
 
+        self._update_dashboard_guard(now)
         for frame in self.session.frame_batch(128):
             if frame.index > self.last_frame:
                 self.history.append(frame)
@@ -1392,6 +1535,16 @@ class AdaptiveRuntime:
         )
         system_gpu_pct = self.gpu_sampler.sample(now)
         cadence_key = vrc_target_key(self.config.target_divisor, target_fps)
+        guard_mode_before_evaluation = self.dashboard_guard.mode
+        frozen_reason = self.dashboard_guard.freeze_reason(
+            window,
+            application_fps,
+            stats,
+            now,
+            self.config.window_seconds,
+        )
+        if guard_mode_before_evaluation == "recovering" and self.dashboard_guard.mode == "ready":
+            self.emit("success", "Dashboard 切换后的统计窗口与帧节拍已稳定；恢复自适应分辨率")
         vrc_profile: dict[str, object] | None = None
         vrc_profile_key = ""
         if (
@@ -1405,59 +1558,71 @@ class AdaptiveRuntime:
                 self.vrc_context.population_bucket,
                 cadence_key,
             )
-            vrc_profile = self.vrc_profile_store.observe(
-                self.hardware_context.hardware_id,
-                self.vrc_context,
-                cadence_key,
-                self.current_scale,
-                stats.gpu_p95_ms,
-                stats.cpu_p95_ms,
-                budget_ms,
-                stats.reprojection_pct,
-                stats.dropped,
-                stats.mispresented,
-                now,
-            )
-        self._update_write_observations(stats, system_gpu_pct, now)
-        rollback = self._rollback_decision(stats, budget_ms, now)
-        target_change_decision = None if rollback is not None else self._target_change_raise_decision(
-            stats,
-            target_fps,
-            budget_ms,
-            system_gpu_pct,
-            now,
-        )
-        vrc_profile_decision = (
-            None
-            if rollback is not None or target_change_decision is not None
-            else self._vrc_profile_raise_decision(
-                vrc_profile,
-                vrc_profile_key,
-                stats,
-                budget_ms,
-                system_gpu_pct,
-                now,
-            )
-        )
-        if rollback is not None:
-            decision_source = "rollback"
-            decision = rollback
-        elif target_change_decision is not None:
-            decision_source = "target_change"
-            decision = target_change_decision
-        elif vrc_profile_decision is not None:
-            decision_source = "vrc_profile"
-            decision = vrc_profile_decision
+            if frozen_reason:
+                vrc_profile = self.vrc_profile_store.get(
+                    self.hardware_context.hardware_id,
+                    self.vrc_context.world_id,
+                    self.vrc_context.population_bucket,
+                    cadence_key,
+                )
+            else:
+                vrc_profile = self.vrc_profile_store.observe(
+                    self.hardware_context.hardware_id,
+                    self.vrc_context,
+                    cadence_key,
+                    self.current_scale,
+                    stats.gpu_p95_ms,
+                    stats.cpu_p95_ms,
+                    budget_ms,
+                    stats.reprojection_pct,
+                    stats.dropped,
+                    stats.mispresented,
+                    now,
+                )
+        if frozen_reason:
+            decision_source = "dashboard"
+            decision = Decision("hold", self.current_scale, frozen_reason)
         else:
-            decision_source = "controller"
-            decision = self.controller.decide(
+            self._update_write_observations(stats, system_gpu_pct, now)
+            rollback = self._rollback_decision(stats, budget_ms, now)
+            target_change_decision = None if rollback is not None else self._target_change_raise_decision(
                 stats,
+                target_fps,
                 budget_ms,
-                self.current_scale,
-                now,
-                self.config,
                 system_gpu_pct,
+                now,
             )
+            vrc_profile_decision = (
+                None
+                if rollback is not None or target_change_decision is not None
+                else self._vrc_profile_raise_decision(
+                    vrc_profile,
+                    vrc_profile_key,
+                    stats,
+                    budget_ms,
+                    system_gpu_pct,
+                    now,
+                )
+            )
+            if rollback is not None:
+                decision_source = "rollback"
+                decision = rollback
+            elif target_change_decision is not None:
+                decision_source = "target_change"
+                decision = target_change_decision
+            elif vrc_profile_decision is not None:
+                decision_source = "vrc_profile"
+                decision = vrc_profile_decision
+            else:
+                decision_source = "controller"
+                decision = self.controller.decide(
+                    stats,
+                    budget_ms,
+                    self.current_scale,
+                    now,
+                    self.config,
+                    system_gpu_pct,
+                )
         decision = self._cap_up_with_vrc_profile(decision, vrc_profile)
         if decision.action == "up" and now < self.up_blocked_until:
             remaining = self.up_blocked_until - now
@@ -1497,7 +1662,9 @@ class AdaptiveRuntime:
         self.sample_seq += 1
         observation = self.write_observations[-1] if self.write_observations else None
         recovery_elapsed = min(WRITE_RECOVERY_SECONDS, max(0.0, now - observation.started_at)) if observation else 0.0
-        if observation is not None and not observation.complete:
+        if frozen_reason:
+            observation_phase = self.dashboard_guard.mode
+        elif observation is not None and not observation.complete:
             observation_phase = f"post_{observation.action}"
         elif self.controller.stable_since is not None:
             observation_phase = "pre_up_stable"
@@ -1559,6 +1726,8 @@ class AdaptiveRuntime:
             recovery_peak_reprojection_pct=observation.peak_reprojection_pct if observation else 0.0,
             recovery_dropped=observation.dropped if observation else 0,
             recovery_mispresented=observation.mispresented if observation else 0,
+            dashboard_visible=self.dashboard_visible,
+            adaptive_frozen_reason=frozen_reason,
         )
 
 

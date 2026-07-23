@@ -56,7 +56,7 @@ from steamvr_core import (
 )
 
 
-APP_VERSION = "0.7.3"
+APP_VERSION = "0.7.4"
 TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
 ONBOARDING_REVISION = 2
 AUTO_UPLOAD_RETRY_SECONDS = 300

@@ -122,6 +122,9 @@ def overlay_rows(data: dict[str, object], visible_fields: list[str]) -> list[tup
         application_fps = min(application_fps, refresh_hz)
     reprojection = float(data.get("reprojection_pct", 0.0))
     action = str(data.get("decision", "hold")).upper()
+    adaptive_frozen = bool(str(data.get("adaptive_frozen_reason", "")).strip())
+    if adaptive_frozen:
+        action = "FROZEN"
     vrc_world = str(data.get("vrc_world_short", ""))
     vrc_population = int(data.get("vrc_population", 0))
     vrc_ready = bool(data.get("vrc_context_ready", False))
@@ -165,7 +168,15 @@ def overlay_rows(data: dict[str, object], visible_fields: list[str]) -> list[tup
         "decision": (
             "SCHEDULER",
             f"{action}  {scale}% > {proposed}%",
-            QColor("#63E6BE") if action == "UP" else QColor("#FF9D66") if action == "DOWN" else QColor("#B8C4D1"),
+            (
+                QColor("#FFD166")
+                if action == "FROZEN"
+                else QColor("#63E6BE")
+                if action == "UP"
+                else QColor("#FF9D66")
+                if action == "DOWN"
+                else QColor("#B8C4D1")
+            ),
         ),
         "reprojection": (
             "REPROJECTION",

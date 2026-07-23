@@ -958,7 +958,7 @@ class PassiveVrcDataCollector:
                 "Content-Type": "application/zip",
                 "Content-Length": str(len(payload)),
                 "X-Batch-SHA256": digest,
-                "User-Agent": "FramePilotVR/0.7.3",
+                "User-Agent": "FramePilotVR/0.7.4",
             },
         )
         try:
