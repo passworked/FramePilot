@@ -1749,8 +1749,11 @@ def run_self_test() -> int:
                 (
                     "[Behaviour] Joining wrld_11111111-1111-1111-1111-111111111111:123~private(redacted)",
                     "[Behaviour] OnPlayerJoined local-user",
+                    "[VisitorsInformationBoard] 42.0 / OnPlayerJoined / player=local-user",
                     "[Behaviour] OnPlayerJoined existing-user-1",
+                    "[VisitorsInformationBoard] 42.0 / OnPlayerJoined / player=existing-user-1",
                     "[Behaviour] OnPlayerJoined existing-user-2",
+                    "[VisitorsInformationBoard] 42.0 / OnPlayerJoined / player=existing-user-2",
                     "",
                 )
             ),
@@ -1762,6 +1765,7 @@ def run_self_test() -> int:
         ready_context = provider.poll(102.0)
         assert ready_context.ready and ready_context.population == 3
         with log_path.open("a", encoding="utf-8") as output:
+            output.write("[VisitorsInformationBoard] 43.0 / OnPlayerLeft / player=existing-user-1\n")
             output.write("[Behaviour] OnPlayerLeft existing-user-1\n")
             output.write("[Behaviour] OnPlayerJoined later-user\n")
         updated_context = provider.poll(103.0)

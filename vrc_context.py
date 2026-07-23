@@ -18,9 +18,11 @@ import uuid
 import zipfile
 
 
-WORLD_PATTERN = re.compile(r"\bJoining\s+(wrld_[0-9a-fA-F-]+)(?::|\s|$)")
-PLAYER_JOIN_PATTERN = re.compile(r"\bOnPlayerJoined\s+(.+?)\s*$")
-PLAYER_LEFT_PATTERN = re.compile(r"\bOnPlayerLeft\s+(.+?)\s*$")
+WORLD_PATTERN = re.compile(
+    r"\[Behaviour\]\s+Joining\s+(wrld_[0-9a-fA-F-]+)(?::|\s|$)"
+)
+PLAYER_JOIN_PATTERN = re.compile(r"\[Behaviour\]\s+OnPlayerJoined\s+(.+?)\s*$")
+PLAYER_LEFT_PATTERN = re.compile(r"\[Behaviour\]\s+OnPlayerLeft\s+(.+?)\s*$")
 INITIAL_POPULATION_QUIET_SECONDS = 1.5
 LOG_DISCOVERY_INTERVAL_SECONDS = 1.0
 PROFILE_SAVE_INTERVAL_SECONDS = 5.0
@@ -956,7 +958,7 @@ class PassiveVrcDataCollector:
                 "Content-Type": "application/zip",
                 "Content-Length": str(len(payload)),
                 "X-Batch-SHA256": digest,
-                "User-Agent": "FramePilotVR/0.7.1",
+                "User-Agent": "FramePilotVR/0.7.2",
             },
         )
         try:
