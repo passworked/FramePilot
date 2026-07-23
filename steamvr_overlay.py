@@ -6,6 +6,7 @@ import json
 import math
 from pathlib import Path
 import socket
+import sys
 import time
 
 import openvr
@@ -52,17 +53,28 @@ OSD_HEIGHT = 22 + OSD_ROW_HEIGHT * OSD_MAX_ROWS + 18
 
 
 class StatusReporter:
-    def __init__(self) -> None:
+    def __init__(self, status_path: Path | None = None) -> None:
         self.last: tuple[str, str] | None = None
+        self.status_path = status_path
 
     def emit(self, state: str, detail: str = "") -> None:
         current = (state, detail)
         if current == self.last:
             return
         self.last = current
+        payload = json.dumps({"state": state, "detail": detail}, ensure_ascii=True)
+        if self.status_path is not None:
+            try:
+                self.status_path.parent.mkdir(parents=True, exist_ok=True)
+                temporary = self.status_path.with_suffix(".tmp")
+                temporary.write_text(payload, encoding="ascii")
+                temporary.replace(self.status_path)
+            except OSError:
+                pass
         # ASCII JSON keeps QProcess status decoding stable on Windows even when
         # the child inherits a legacy console code page.
-        print(json.dumps({"state": state, "detail": detail}, ensure_ascii=True), flush=True)
+        if sys.stdout is not None:
+            print(payload, flush=True)
 
 
 def _steamvr_running() -> bool:
@@ -291,8 +303,8 @@ def _head_locked_transform(anchor: str = "upper_left") -> openvr.HmdMatrix34_t:
     return transform
 
 
-def run_overlay() -> int:
-    reporter = StatusReporter()
+def run_overlay(status_path: Path | None = None) -> int:
+    reporter = StatusReporter(status_path)
     reporter.emit("starting")
     receiver = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
     receiver.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)

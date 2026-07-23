@@ -56,7 +56,7 @@ from steamvr_core import (
 )
 
 
-APP_VERSION = "0.7.0"
+APP_VERSION = "0.7.1"
 TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
 ONBOARDING_REVISION = 2
 AUTO_UPLOAD_RETRY_SECONDS = 300
@@ -1107,6 +1107,15 @@ class MainWindow(QMainWindow):
         self._closing = False
         self.overlay_process: QProcess | None = None
         self._overlay_stdout_buffer = ""
+        self._overlay_status_path = (
+            Path(os.environ.get("LOCALAPPDATA", str(executable_dir())))
+            / "SteamVRAdaptiveResolution"
+            / f"overlay-status-{os.getpid()}.json"
+        )
+        self._overlay_status_contents = ""
+        self._overlay_status_timer = QTimer(self)
+        self._overlay_status_timer.setInterval(250)
+        self._overlay_status_timer.timeout.connect(self._poll_overlay_status_file)
         self.overlay_state = "disabled"
         self._overlay_expected_stop = False
         self.onboarding_dialog: OnboardingDialog | None = None
@@ -1767,15 +1776,38 @@ class MainWindow(QMainWindow):
                 status = json.loads(line)
             except (TypeError, ValueError):
                 continue
-            if not isinstance(status, dict):
-                continue
-            state = str(status.get("state", "error"))
-            detail = str(status.get("detail", ""))
-            self._set_overlay_status(state, detail)
-            if state == "waiting_scene":
-                QTimer.singleShot(100, self._send_overlay_settings)
+            self._apply_overlay_status(status)
+
+    def _apply_overlay_status(self, status: object) -> None:
+        if not isinstance(status, dict):
+            return
+        state = str(status.get("state", "error"))
+        detail = str(status.get("detail", ""))
+        self._set_overlay_status(state, detail)
+        if state == "waiting_scene":
+            QTimer.singleShot(100, self._send_overlay_settings)
+
+    def _poll_overlay_status_file(self) -> None:
+        try:
+            contents = self._overlay_status_path.read_text(encoding="ascii")
+        except OSError:
+            return
+        if contents == self._overlay_status_contents:
+            return
+        self._overlay_status_contents = contents
+        try:
+            status = json.loads(contents)
+        except (TypeError, ValueError):
+            return
+        self._apply_overlay_status(status)
+
+    def _overlay_started(self) -> None:
+        self._set_overlay_status("starting")
+        self._overlay_status_timer.start()
+        QTimer.singleShot(300, self._send_overlay_settings)
 
     def _overlay_finished(self, exit_code: int, _status) -> None:
+        self._overlay_status_timer.stop()
         expected_stop = self._overlay_expected_stop
         self._overlay_expected_stop = False
         if self._closing or expected_stop or not self.overlay_enabled_check.isChecked():
@@ -1797,7 +1829,7 @@ class MainWindow(QMainWindow):
         if self.overlay_process is None:
             process = QProcess(self)
             process.readyReadStandardOutput.connect(self._read_overlay_status)
-            process.started.connect(lambda: (self._set_overlay_status("starting"), QTimer.singleShot(300, self._send_overlay_settings)))
+            process.started.connect(self._overlay_started)
             process.finished.connect(self._overlay_finished)
             process.errorOccurred.connect(self._overlay_process_error)
             self.overlay_process = process
@@ -1808,19 +1840,34 @@ class MainWindow(QMainWindow):
         if self.overlay_enabled_check.isChecked():
             if process.state() == QProcess.ProcessState.NotRunning:
                 self._overlay_expected_stop = False
-                script = Path(__file__).with_name("steamvr_overlay.py")
-                process.setWorkingDirectory(str(script.parent))
-                process.setProgram(sys.executable)
-                process.setArguments([str(script)])
+                self._overlay_status_contents = ""
+                self._overlay_status_path.unlink(missing_ok=True)
+                if getattr(sys, "frozen", False):
+                    process.setWorkingDirectory(str(Path(sys.executable).parent))
+                    process.setProgram(sys.executable)
+                    process.setArguments(
+                        [
+                            "--overlay-process",
+                            "--overlay-status-file",
+                            str(self._overlay_status_path),
+                        ]
+                    )
+                else:
+                    script = Path(__file__).with_name("steamvr_overlay.py")
+                    process.setWorkingDirectory(str(script.parent))
+                    process.setProgram(sys.executable)
+                    process.setArguments([str(script)])
                 process.start()
                 self.append_event("info", "VR 参数叠加层已启动；SteamVR 未运行时会自动等待")
         elif process.state() != QProcess.ProcessState.NotRunning:
             self._overlay_expected_stop = True
+            self._overlay_status_timer.stop()
             process.terminate()
             if not process.waitForFinished(1200):
                 process.kill()
                 process.waitForFinished(500)
         else:
+            self._overlay_status_timer.stop()
             self._set_overlay_status("disabled")
 
     def _setup_tray(self) -> None:
@@ -2592,6 +2639,8 @@ def make_icon() -> QIcon:
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FramePilot VR desktop panel")
+    parser.add_argument("--overlay-process", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--overlay-status-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--screenshot", type=Path)
     parser.add_argument("--auto-close", type=float, default=0.0)
     parser.add_argument("--language", choices=("zh", "en"), help="临时覆盖界面语言")
@@ -2602,6 +2651,11 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.overlay_process:
+        from steamvr_overlay import run_overlay
+
+        app = QApplication(sys.argv[:1])
+        return run_overlay(args.overlay_status_file)
     app = QApplication(sys.argv[:1])
     app.setApplicationName("FramePilot VR")
     app.setApplicationVersion(APP_VERSION)
