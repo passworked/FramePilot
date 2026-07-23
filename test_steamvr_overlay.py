@@ -1,0 +1,74 @@
+from __future__ import annotations
+
+import math
+import unittest
+
+from steamvr_core import FrameSample, application_framerate
+from steamvr_overlay import overlay_rows
+
+
+class ApplicationFramerateTests(unittest.TestCase):
+    @staticmethod
+    def samples(fps: float, count: int = 10) -> list[FrameSample]:
+        return [
+            FrameSample(
+                index=index,
+                timestamp=index / fps,
+                gpu_ms=4.0,
+                cpu_ms=2.0,
+                interval_ms=4.08,
+                dropped=0,
+                mispresented=0,
+                reprojection=False,
+            )
+            for index in range(count)
+        ]
+
+    def test_uses_compositor_timestamps_instead_of_client_interval(self) -> None:
+        result = application_framerate(self.samples(36.0), refresh_hz=72.0)
+
+        self.assertTrue(math.isclose(result, 36.0))
+
+    def test_sparse_poll_samples_use_compositor_frame_index_delta(self) -> None:
+        samples = self.samples(36.0, count=4)
+        sparse_samples = [samples[0], samples[3]]
+
+        result = application_framerate(sparse_samples, refresh_hz=72.0)
+
+        self.assertTrue(math.isclose(result, 36.0))
+
+    def test_never_exceeds_headset_refresh(self) -> None:
+        result = application_framerate(self.samples(245.0), refresh_hz=72.0)
+
+        self.assertEqual(result, 72.0)
+
+    def test_osd_shows_application_framerate_for_live_regression_case(self) -> None:
+        data = {
+            "refresh_hz": 72.0,
+            "application_fps": 72.0,
+            "target_fps": 72.0,
+            "budget_ms": 1000.0 / 72.0,
+            "frame_interval_p95_ms": 4.08,
+        }
+
+        label, value, _color = overlay_rows(data, ["fps"])[0]
+
+        self.assertEqual(label, "APP FRAMERATE")
+        self.assertEqual(value, "72.0 FPS")
+
+    def test_old_packet_falls_back_to_honest_refresh_metric(self) -> None:
+        data = {
+            "refresh_hz": 72.0,
+            "target_fps": 72.0,
+            "budget_ms": 1000.0 / 72.0,
+            "frame_interval_p95_ms": 4.08,
+        }
+
+        label, value, _color = overlay_rows(data, ["fps"])[0]
+
+        self.assertEqual(label, "HMD REFRESH")
+        self.assertEqual(value, "72 Hz")
+
+
+if __name__ == "__main__":
+    unittest.main()

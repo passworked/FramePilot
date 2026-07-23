@@ -93,6 +93,15 @@ def _color_for_load(value: float, budget: float) -> QColor:
     return QColor("#63E6BE")
 
 
+def _color_for_framerate(application_fps: float, target_fps: float) -> QColor:
+    ratio = application_fps / max(target_fps, 0.1)
+    if ratio < 0.75:
+        return QColor("#FF5F6D")
+    if ratio < 0.92:
+        return QColor("#FFD166")
+    return QColor("#63E6BE")
+
+
 def overlay_rows(data: dict[str, object], visible_fields: list[str]) -> list[tuple[str, str, QColor]]:
     gpu = float(data.get("gpu_p95_ms", 0.0))
     cpu = float(data.get("cpu_p95_ms", 0.0))
@@ -106,9 +115,11 @@ def overlay_rows(data: dict[str, object], visible_fields: list[str]) -> list[tup
     equivalent_height = round(base_height * dimension_ratio)
     system_gpu = data.get("system_gpu_pct")
     system_cpu = float(data.get("system_cpu_pct", 0.0))
+    refresh_hz = float(data.get("refresh_hz", 0.0))
     target_fps = float(data.get("target_fps", 0.0))
-    frame_interval = float(data.get("frame_interval_p95_ms", 0.0))
-    delivered_fps = 1000.0 / frame_interval if frame_interval > 0.0 else 0.0
+    application_fps = float(data.get("application_fps", 0.0))
+    if refresh_hz > 1.0:
+        application_fps = min(application_fps, refresh_hz)
     reprojection = float(data.get("reprojection_pct", 0.0))
     action = str(data.get("decision", "hold")).upper()
     vrc_world = str(data.get("vrc_world_short", ""))
@@ -123,8 +134,19 @@ def overlay_rows(data: dict[str, object], visible_fields: list[str]) -> list[tup
         learned = f"  /  LEARNED {vrc_safe_scale}%" if vrc_safe_scale > 0 else ""
         vrc_context_text = f"{vrc_world}  /  {vrc_population} PLAYERS{learned}"
 
+    if application_fps > 0.0:
+        framerate_row = (
+            "APP FRAMERATE",
+            f"{application_fps:.1f} FPS",
+            _color_for_framerate(application_fps, target_fps),
+        )
+    elif refresh_hz > 1.0:
+        framerate_row = ("HMD REFRESH", f"{refresh_hz:g} Hz", QColor("#B8C4D1"))
+    else:
+        framerate_row = ("APP FRAMERATE", "n/a", QColor("#B8C4D1"))
+
     definitions = {
-        "fps": ("FRAMERATE", f"{delivered_fps:.1f} FPS", _color_for_load(frame_interval, budget)),
+        "fps": framerate_row,
         "gpu_ms": ("GPU P95", f"{gpu:.2f} ms", _color_for_load(gpu, budget)),
         "cpu_ms": ("CPU P95", f"{cpu:.2f} ms", QColor("#FF9D66")),
         "gpu_util": (
@@ -441,6 +463,8 @@ def main() -> int:
             "gpu_p95_ms": 20.0,
             "cpu_p95_ms": 8.0,
             "budget_ms": 33.333,
+            "refresh_hz": 90.0,
+            "application_fps": 30.0,
             "target_fps": 30.0,
             "frame_interval_p95_ms": 27.0,
             "system_gpu_pct": 98.0,

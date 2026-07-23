@@ -360,6 +360,7 @@ class TelemetrySnapshot:
     app_key: str
     app_pid: int
     refresh_hz: float
+    application_fps: float
     target_divisor: int
     target_fps: float
     budget_ms: float
@@ -417,6 +418,7 @@ class TelemetrySnapshot:
             "app_key": self.app_key,
             "app_pid": self.app_pid,
             "refresh_hz": self.refresh_hz,
+            "application_fps": self.application_fps,
             "target_divisor": self.target_divisor,
             "target_fps": self.target_fps,
             "budget_ms": self.budget_ms,
@@ -499,6 +501,27 @@ def effective_frame_budget(
     else:
         target_fps = refresh_hz if configured_target_fps <= 0 else min(refresh_hz, configured_target_fps)
     return target_fps, 1000.0 / target_fps
+
+
+def application_framerate(samples: list[FrameSample], refresh_hz: float) -> float:
+    """Calculate submitted application FPS from compositor frame timestamps."""
+    if refresh_hz <= 1.0 or len(samples) < 2:
+        return 0.0
+
+    ordered = sorted(samples, key=lambda sample: sample.timestamp)
+    elapsed_seconds = 0.0
+    submitted_frames = 0
+    previous = ordered[0]
+    for current in ordered[1:]:
+        frame_delta = current.index - previous.index
+        time_delta = current.timestamp - previous.timestamp
+        if frame_delta > 0 and time_delta > 0.0:
+            submitted_frames += frame_delta
+            elapsed_seconds += time_delta
+        previous = current
+    if submitted_frames <= 0 or elapsed_seconds <= 0.0:
+        return 0.0
+    return min(refresh_hz, submitted_frames / elapsed_seconds)
 
 
 def action_cooldown_seconds(action: str, config: RuntimeConfig) -> float:
@@ -1361,6 +1384,7 @@ class AdaptiveRuntime:
 
         stats = summarize(window)
         refresh_hz = self.session.refresh_rate()
+        application_fps = application_framerate(window, refresh_hz)
         target_fps, budget_ms = effective_frame_budget(
             refresh_hz,
             self.config.target_fps,
@@ -1484,6 +1508,7 @@ class AdaptiveRuntime:
             app_key=app_key,
             app_pid=pid,
             refresh_hz=refresh_hz,
+            application_fps=application_fps,
             target_divisor=self.config.target_divisor,
             target_fps=target_fps,
             budget_ms=budget_ms,
@@ -1730,6 +1755,24 @@ def run_self_test() -> int:
     assert effective_frame_budget(72.0, target_divisor=3) == (24.0, 1000.0 / 24.0)
     assert effective_frame_budget(72.0, target_divisor=4) == (18.0, 1000.0 / 18.0)
     assert effective_frame_budget(90.0, 60.0, 0) == (60.0, 1000.0 / 60.0)
+    frame_template = {
+        "gpu_ms": 4.0,
+        "cpu_ms": 2.0,
+        "interval_ms": 4.08,
+        "dropped": 0,
+        "mispresented": 0,
+        "reprojection": False,
+    }
+    half_rate_frames = [
+        FrameSample(index=index, timestamp=index / 36.0, **frame_template)
+        for index in range(10)
+    ]
+    assert math.isclose(application_framerate(half_rate_frames, 72.0), 36.0)
+    impossible_rate_frames = [
+        FrameSample(index=index, timestamp=index * 0.00408, **frame_template)
+        for index in range(10)
+    ]
+    assert application_framerate(impossible_rate_frames, 72.0) == 72.0
 
     exported = portable_policy(config, "self-test")
     imported = config_from_portable_policy(exported, RuntimeConfig(mode="continuous", armed=True))
