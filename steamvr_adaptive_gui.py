@@ -1301,6 +1301,7 @@ class MainWindow(QMainWindow):
         chart_title.setStyleSheet("font-weight: 650; font-size: 14px;")
         self.hmd_label = QLabel("HMD —")
         self.hmd_label.setObjectName("Muted")
+        self.hmd_label.setMaximumWidth(520)
         chart_header.addWidget(chart_title)
         chart_header.addStretch()
         chart_header.addWidget(self.hmd_label)
@@ -1521,6 +1522,8 @@ class MainWindow(QMainWindow):
         controls_layout.addWidget(self.experiment_group)
         controls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         controls_scroll.setWidget(controls)
+        controls_scroll.setMinimumWidth(330)
+        controls_scroll.setMaximumWidth(420)
         controls_scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         body.addWidget(controls_scroll, 3, Qt.AlignmentFlag.AlignTop)
         outer.addLayout(body)
@@ -2800,10 +2803,12 @@ class MainWindow(QMainWindow):
             f"SteamVR {scale}% · {recommend_text} {arrow} {proposed}%",
         )
         base_text = "base" if self.language == "en" else "基准"
-        self.hmd_label.setText(
+        hmd_text = (
             f"{refresh:.0f} Hz · {target_text} · {base_text} {render_width}×{render_height} · "
             f"{writes_text} {int(data['write_count'])}{times_text}"
         )
+        self.hmd_label.setText(hmd_text)
+        self.hmd_label.setToolTip(hmd_text)
         current_recommendation = "Current recommendation" if self.language == "en" else "当前建议"
         self.decision_label.setText(
             f"{self.localize_message(str(data['reason']))}\n{current_recommendation}: {proposed}%"
