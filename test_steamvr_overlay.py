@@ -82,6 +82,19 @@ class ApplicationFramerateTests(unittest.TestCase):
         self.assertEqual(label, "SCHEDULER")
         self.assertEqual(value, "FROZEN  81% > 81%")
 
+    def test_osd_distinguishes_recovery_wait_from_generic_hold(self) -> None:
+        data = {
+            "resolution_scale": 71,
+            "proposed_scale": 71,
+            "decision": "hold",
+            "reason": "性能余量观察中 7/12 秒",
+            "observation_phase": "pre_up_stable",
+        }
+
+        _label, value, _color = overlay_rows(data, ["decision"])[0]
+
+        self.assertEqual(value, "WAIT  71% > 71%")
+
 
 if __name__ == "__main__":
     unittest.main()

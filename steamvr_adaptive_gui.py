@@ -58,7 +58,7 @@ from steamvr_core import (
 
 APP_VERSION = "0.7.4"
 TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
-ONBOARDING_REVISION = 2
+ONBOARDING_REVISION = 3
 AUTO_UPLOAD_MIN_INTERVAL_SECONDS = 15 * 60
 AUTO_UPLOAD_RECORD_THRESHOLD = 25
 AUTO_UPLOAD_MAX_BACKOFF_SECONDS = 2 * 60 * 60
@@ -129,6 +129,12 @@ def auto_upload_due(
     return False, interval_due_at
 
 
+def clear_persisted_write_unlock(settings: QSettings) -> bool:
+    """Write permission is intentionally session-only."""
+    settings.remove("runtime/armed")
+    return False
+
+
 def compare_ab_results(results: list[dict[str, object]]) -> dict[str, object] | None:
     a_results = [item for item in results if item.get("variant") == "A"][-3:]
     b_results = [item for item in results if item.get("variant") == "B"][-3:]
@@ -175,13 +181,18 @@ ZH_EN = {
     "只读监控": "Read-only monitor",
     "单步自动调整": "One-step adjustment",
     "连续自适应": "Continuous adaptive",
-    "解锁 SteamVR 设置写入": "Unlock SteamVR setting writes",
+    "允许修改 SteamVR 分辨率（本次运行）": "Allow SteamVR resolution changes (this session)",
     "退出时恢复启动值": "Restore startup value on exit",
-    "自适应参数": "Adaptive parameters",
+    "分辨率调节范围与规则": "Resolution adjustment range and rules",
+    "程序只自动改变分辨率，不会自行修改这些规则。": "The app changes only resolution; it does not rewrite these rules.",
     "最低": "Minimum",
     "最高": "Maximum",
-    "降档": "Step down",
-    "升档": "Step up",
+    "降档步长": "Step down",
+    "升档步长": "Step up",
+    "升档冷却": "Raise cooldown",
+    "升档后保护": "Post-raise protection",
+    "回退后禁升": "Raise lockout after rollback",
+    "升档 GPU 上限": "Raise GPU limit",
     "冷却": "Cooldown",
     "升档观察": "Raise observation",
     "应用控制参数": "Apply control parameters",
@@ -564,7 +575,7 @@ class OnboardingDialog(QDialog):
         upload_hint.setObjectName("Muted")
         upload_hint.setWordWrap(True)
         layout.addWidget(upload_hint)
-        safety = QLabel("确认数据正常后，再从主面板解锁 SteamVR 设置写入。")
+        safety = QLabel("确认数据正常后，再从主面板允许本次运行修改 SteamVR 分辨率。")
         safety.setObjectName("Muted")
         safety.setWordWrap(True)
         layout.addWidget(safety)
@@ -605,6 +616,15 @@ class OnboardingDialog(QDialog):
         target_index = self.main_window.target_fps_combo.findData(divisor)
         if target_index >= 0:
             self.main_window.target_fps_combo.setCurrentIndex(target_index)
+        self.main_window.mode_combo.blockSignals(True)
+        self.main_window.mode_combo.setCurrentIndex(
+            self.main_window.mode_combo.findData("monitor")
+        )
+        self.main_window.mode_combo.blockSignals(False)
+        self.main_window.arm_check.blockSignals(True)
+        self.main_window.arm_check.setChecked(False)
+        self.main_window.arm_check.blockSignals(False)
+        clear_persisted_write_unlock(self.main_window.settings)
         self.main_window.set_auto_upload_enabled(self.guide_auto_upload.isChecked())
         self.main_window.settings.setValue("onboarding/completed", True)
         self.main_window.settings.setValue("onboarding/revision", ONBOARDING_REVISION)
@@ -931,7 +951,7 @@ class MonitorWorker(QObject):
             raise RuntimeError("尚未取得 VR 游戏帧时序，暂时不能校准")
         precise = bool(options.get("precise", False))
         if precise and not self.runtime.config.armed:
-            raise PermissionError("精确校准需要先解锁 SteamVR 设置写入")
+            raise PermissionError("精确校准需要先允许本次运行修改 SteamVR 分辨率")
         original = int(self.runtime.current_scale)
         stages = [original]
         if precise:
@@ -1251,6 +1271,12 @@ class MainWindow(QMainWindow):
         header.addWidget(self.connection_label)
         outer.addLayout(header)
 
+        self.write_status_label = QLabel()
+        self.write_status_label.setWordWrap(True)
+        self.write_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer.addWidget(self.write_status_label)
+        self._update_write_status_banner()
+
         cards = QGridLayout()
         cards.setHorizontalSpacing(11)
         self.gpu_card = MetricCard("GPU 帧时间 P95", "—", "帧预算 —")
@@ -1320,7 +1346,11 @@ class MainWindow(QMainWindow):
         target_hint.setWordWrap(True)
         target_hint.setObjectName("Muted")
         mode_layout.addWidget(target_hint)
-        self.arm_check = QCheckBox("解锁 SteamVR 设置写入")
+        self.arm_check = QCheckBox("允许修改 SteamVR 分辨率（本次运行）")
+        self.arm_check.setToolTip(
+            "未勾选时只监控和推荐，不会写入 SteamVR。"
+            "勾选后，单步、连续和手动操作可修改当前游戏的 resolutionScale；下次启动会重新锁定。"
+        )
         self.arm_check.stateChanged.connect(self.arm_changed)
         self.restore_exit_check = QCheckBox("退出时恢复启动值")
         self.restore_exit_check.setChecked(True)
@@ -1411,7 +1441,7 @@ class MainWindow(QMainWindow):
         overlay_layout.addWidget(self.overlay_advanced)
         controls_layout.addWidget(self.overlay_group)
 
-        self.range_group = QGroupBox("自适应参数")
+        self.range_group = QGroupBox("分辨率调节范围与规则")
         grid = QGridLayout(self.range_group)
         self.min_spin = make_spin(20, 500, 30, "%")
         self.max_spin = make_spin(20, 500, 150, "%")
@@ -1426,6 +1456,7 @@ class MainWindow(QMainWindow):
             ("最低", self.min_spin),
             ("最高", self.max_spin),
             ("降档步长", self.down_spin),
+            ("升档步长", self.up_spin),
             ("升档冷却", self.cooldown_spin),
             ("升档观察", self.stable_spin),
             ("升档后保护", self.up_observation_spin),
@@ -1436,9 +1467,13 @@ class MainWindow(QMainWindow):
             grid.addWidget(QLabel(label), row, 0)
             grid.addWidget(widget, row, 1)
             widget.valueChanged.connect(lambda _value: self.apply_config())
+        rules_hint = QLabel("程序只自动改变分辨率，不会自行修改这些规则。")
+        rules_hint.setWordWrap(True)
+        rules_hint.setObjectName("Muted")
+        grid.addWidget(rules_hint, len(controls_list), 0, 1, 2)
         self.save_config_button = QPushButton("应用控制参数")
         self.save_config_button.clicked.connect(self.apply_config)
-        grid.addWidget(self.save_config_button, len(controls_list), 0, 1, 2)
+        grid.addWidget(self.save_config_button, len(controls_list) + 1, 0, 1, 2)
         self.save_config_button.setVisible(False)
         controls_layout.addWidget(self.range_group)
 
@@ -2110,6 +2145,12 @@ class MainWindow(QMainWindow):
         replacements = (
             ("性能余量已稳定", "Performance headroom stable for"),
             ("性能余量观察中", "Observing performance headroom"),
+            ("GPU 余量不足以回升", "Insufficient GPU headroom to raise"),
+            ("CPU 波动超过回升线", "CPU variation exceeds the raise threshold"),
+            ("检测到重投影", "Reprojection detected"),
+            ("暂缓回升", "raise deferred"),
+            ("等待形成连续稳定余量", "Waiting for continuous stable headroom"),
+            ("单次升档限制为", "Per-raise step limited to"),
             ("已连接 SteamVR", "Connected to SteamVR"),
             ("推荐目标", "recommended target"),
             ("硬件配置", "Hardware profile"),
@@ -2233,13 +2274,18 @@ class MainWindow(QMainWindow):
             self.update_snapshot(self.last_snapshot)
         if self.last_collection_status:
             self.update_collection_status(self.last_collection_status)
+        self._update_write_status_banner()
         self.update_connection(*self.connection_state)
         if announce:
             message = "Language switched to English" if self.language == "en" else "语言已切换为中文"
             self.append_event("info", message)
 
     def _restore_cached_config(self) -> None:
+        self.arm_check.blockSignals(True)
+        self.arm_check.setChecked(clear_persisted_write_unlock(self.settings))
+        self.arm_check.blockSignals(False)
         if not self.settings.contains("runtime/mode"):
+            self.settings.sync()
             return
 
         def number(key: str, default: float, converter):
@@ -2247,12 +2293,6 @@ class MainWindow(QMainWindow):
                 return converter(float(self.settings.value(key, default)))
             except (TypeError, ValueError):
                 return converter(default)
-
-        def boolean(key: str, default: bool) -> bool:
-            value = self.settings.value(key, default)
-            if isinstance(value, bool):
-                return value
-            return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
         self._loading_controls = True
         try:
@@ -2298,18 +2338,16 @@ class MainWindow(QMainWindow):
             if mode_index >= 0:
                 self.mode_combo.setCurrentIndex(mode_index)
 
-            self.arm_check.blockSignals(True)
-            self.arm_check.setChecked(boolean("runtime/armed", False))
-            self.arm_check.blockSignals(False)
         finally:
             self._loading_controls = False
+        self.settings.sync()
+        self._update_write_status_banner()
 
     def _cache_config(self, config: RuntimeConfig) -> None:
         values = {
             "scheduler_revision": 1,
             "preset": str(self.preset_combo.currentData()),
             "mode": config.mode,
-            "armed": config.armed,
             "target_divisor": config.target_divisor,
             "target_fps": config.target_fps,
             "min_scale": config.min_scale,
@@ -2329,6 +2367,7 @@ class MainWindow(QMainWindow):
         }
         for key, value in values.items():
             self.settings.setValue(f"runtime/{key}", value)
+        self.settings.remove("runtime/armed")
         self.settings.sync()
 
     def config_from_ui(self) -> RuntimeConfig:
@@ -2387,6 +2426,7 @@ class MainWindow(QMainWindow):
             return
         self.worker.submit_config(config)
         self.manual_apply.setEnabled(config.armed)
+        self._update_write_status_banner(config)
         if self._skip_next_cache:
             self._skip_next_cache = False
         else:
@@ -2491,9 +2531,9 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(
                     self,
                     "Writes locked" if self.language == "en" else "写入锁定",
-                    "Unlock SteamVR setting writes before precise stepped calibration."
+                    "Allow SteamVR resolution changes for this session before precise stepped calibration."
                     if self.language == "en"
-                    else "精确阶梯校准需要先解锁 SteamVR 设置写入。",
+                    else "精确阶梯校准需要先允许本次运行修改 SteamVR 分辨率。",
                 )
                 return
             answer = QMessageBox.warning(
@@ -2567,11 +2607,11 @@ class MainWindow(QMainWindow):
         if state and not self._closing:
             result = QMessageBox.warning(
                 self,
-                "Unlock writes" if self.language == "en" else "解锁写入",
+                "Allow resolution changes" if self.language == "en" else "允许修改分辨率",
                 (
-                    "Once unlocked, one-step, continuous, and manual modes may change the current game's SteamVR resolutionScale.\n\nObserve in read-only mode first, then validate one step."
+                    "For this run, one-step, continuous, and manual modes may change the current game's SteamVR resolutionScale.\n\nThis permission is cleared when FramePilot starts again. Observe in read-only mode first, then validate one step."
                     if self.language == "en"
-                    else "解锁后，单步、连续和手动模式都可以修改当前游戏的 SteamVR resolutionScale。\n\n建议先使用只读模式观察，再进行单步验证。"
+                    else "允许后，本次运行中的单步、连续和手动模式都可以修改当前游戏的 SteamVR resolutionScale。\n\n下次启动会重新锁定。建议先使用只读模式观察，再进行单步验证。"
                 ),
                 QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
@@ -2581,13 +2621,57 @@ class MainWindow(QMainWindow):
                 self.arm_check.setChecked(False)
                 self.arm_check.blockSignals(False)
         self.apply_config()
+        self._update_write_status_banner()
+
+    def _update_write_status_banner(
+        self,
+        config: RuntimeConfig | None = None,
+    ) -> None:
+        if not hasattr(self, "write_status_label"):
+            return
+        if config is None:
+            try:
+                config = self.config_from_ui()
+            except (AttributeError, TypeError, ValueError):
+                config = RuntimeConfig()
+        if not config.armed:
+            text = (
+                "READ-ONLY · SteamVR will not be modified"
+                if self.language == "en"
+                else "只读监控 · 不会修改 SteamVR"
+            )
+            colors = ("#0F2B25", "#6FE0B1", "#245E50")
+        elif config.mode == "continuous":
+            text = (
+                "LIVE CONTROL ENABLED · Resolution may change continuously"
+                if self.language == "en"
+                else "连续控制已启用 · 分辨率可能持续变化"
+            )
+            colors = ("#3A171C", "#FF9AAA", "#7A303B")
+        else:
+            text = (
+                "WRITES ALLOWED · One-step and manual actions may change resolution"
+                if self.language == "en"
+                else "已允许写入 · 单步和手动操作可能修改分辨率"
+            )
+            colors = ("#382B12", "#F2C36B", "#725923")
+        background, foreground, border = colors
+        self.write_status_label.setText(text)
+        self.write_status_label.setStyleSheet(
+            f"background:{background};color:{foreground};border:1px solid {border};"
+            "border-radius:7px;padding:8px;font-weight:650;"
+        )
 
     def start_experiment(self, variant: str) -> None:
         if not self.last_snapshot:
             QMessageBox.information(self, "等待 VRChat", "请先进入稳定的 VRChat 场景并取得帧时序。")
             return
         if not self.arm_check.isChecked():
-            QMessageBox.information(self, "写入锁定", "A/B 测试会主动修改分辨率，请先解锁 SteamVR 设置写入。")
+            QMessageBox.information(
+                self,
+                "写入锁定",
+                "A/B 测试会主动修改分辨率，请先允许本次运行修改 SteamVR 分辨率。",
+            )
             return
         start_scale = 100 if variant == "A" else 150
         answer = QMessageBox.warning(
@@ -2644,9 +2728,9 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "Writes locked" if self.language == "en" else "写入锁定",
-                "Enable “Unlock SteamVR setting writes” first."
+                "Enable “Allow SteamVR resolution changes (this session)” first."
                 if self.language == "en"
-                else "请先勾选“解锁 SteamVR 设置写入”。",
+                else "请先勾选“允许修改 SteamVR 分辨率（本次运行）”。",
             )
             return
         current = self.last_snapshot.get("resolution_scale", "—")

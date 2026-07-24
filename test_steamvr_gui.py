@@ -5,6 +5,7 @@ import unittest
 from steamvr_adaptive_gui import (
     AUTO_UPLOAD_MIN_INTERVAL_SECONDS,
     auto_upload_due,
+    clear_persisted_write_unlock,
 )
 
 
@@ -53,6 +54,24 @@ class AutoUploadSchedulingTests(unittest.TestCase):
 
         self.assertFalse(due)
         self.assertEqual(wake_at, 3_000.0)
+
+
+class _FakeSettings:
+    def __init__(self) -> None:
+        self.values = {"runtime/armed": True}
+
+    def remove(self, key: str) -> None:
+        self.values.pop(key, None)
+
+
+class WriteSafetyTests(unittest.TestCase):
+    def test_saved_write_unlock_is_cleared_at_startup(self) -> None:
+        settings = _FakeSettings()
+
+        armed = clear_persisted_write_unlock(settings)  # type: ignore[arg-type]
+
+        self.assertFalse(armed)
+        self.assertNotIn("runtime/armed", settings.values)
 
 
 if __name__ == "__main__":

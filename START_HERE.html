@@ -55,7 +55,7 @@
         <li>依次启动头显软件、SteamVR 和 VR 游戏。</li>
         <li>双击 <code>start_panel.bat</code>；也可以直接运行 <code>FramePilotVR.exe</code>。</li>
         <li>在面板顶部选择“中文”。</li>
-        <li>确认执行方式为“只读监控”，写入锁未勾选。</li>
+        <li>程序每次启动都会重新锁定写入。确认执行方式为“只读监控”，顶部显示“不会修改 SteamVR”。</li>
         <li>选择原生刷新率，或刷新率的 1/2、1/3、1/4；72 Hz 会自动对应 72/36/24/18 FPS 预算。</li>
         <li>Guide 最后一步默认勾选自动上传匿名聚合记录；不希望上传时取消勾选，之后也可在主面板随时关闭。</li>
       </ol>
@@ -64,18 +64,18 @@
       <ol>
         <li><span class="safe">先只读：</span>观察 GPU P95、CPU P95、帧预算和建议值。</li>
         <li>在代表性游戏场景中运行 45–90 秒“只读校准”。</li>
-        <li>若要验证动态修改，打开“高级模式”，先勾选写入解锁，再使用“单步自动调整”。</li>
+        <li>若要验证动态修改，打开“高级模式”，勾选“允许修改 SteamVR 分辨率（本次运行）”，再使用“单步自动调整”。</li>
         <li>确认游戏能在运行中响应后，才考虑“精确阶梯”或“连续自适应”。</li>
       </ol>
 
       <h2>4. 安全提示</h2>
       <ul>
-        <li>默认只读，不会修改 SteamVR。</li>
+        <li>写入许可只在本次运行有效；下次启动会重新锁定。只读状态不会修改 SteamVR。</li>
         <li>精确阶梯会测试当前值、-10% 和 +10%，结束时恢复原值。</li>
         <li>面板退出时始终恢复启动值；该安全项不再暴露为可关闭选项。</li>
         <li>部分游戏只有重启后才读取新的分辨率。</li>
         <li><b>刷新率分频只是动态分辨率预算，不是游戏限帧器。</b>实际帧率仍由游戏和 SteamVR 重投影决定。</li>
-        <li>普通模式只显示核心操作；阈值、步长、上下限、单步、精确校准、策略迁移和手动设置位于高级模式。</li>
+        <li>“分辨率调节范围与规则”不会被程序自行修改；自动变化的只有 SteamVR 分辨率。规则、单步、精确校准、策略迁移和手动设置位于高级模式。</li>
       </ul>
     </article>
 
@@ -96,7 +96,7 @@
         <li>Start the headset software, SteamVR, and then the VR game.</li>
         <li>Double-click <code>start_panel.bat</code>, or run <code>FramePilotVR.exe</code> directly.</li>
         <li>Select “English” from the language menu at the top.</li>
-        <li>Confirm that “Read-only monitor” is selected and setting writes are locked.</li>
+        <li>Writes are locked again every time the app starts. Confirm “Read-only monitor” and the banner stating that SteamVR will not be modified.</li>
         <li>Select the native refresh rate or 1/2, 1/3, or 1/4 of it. At 72 Hz these become 72/36/24/18 FPS budgets automatically.</li>
         <li>The final Guide step enables automatic upload of anonymous aggregates by default. Clear the checkbox to keep data local; it can also be changed later in the main panel.</li>
       </ol>
@@ -105,18 +105,18 @@
       <ol>
         <li><span class="safe">Start read-only:</span> inspect GPU P95, CPU P95, frame budget, and the recommendation.</li>
         <li>Run “Read-only calibration” for 45–90 seconds in a representative scene.</li>
-        <li>To validate live changes, enable “Advanced mode,” unlock writes, and try “One-step adjustment” first.</li>
+        <li>To validate live changes, enable “Advanced mode,” select “Allow SteamVR resolution changes (this session),” and try “One-step adjustment” first.</li>
         <li>Use “Precise steps” or “Continuous adaptive” only after the game responds correctly at runtime.</li>
       </ol>
 
       <h2>4. Safety notes</h2>
       <ul>
-        <li>The default mode is read-only and does not modify SteamVR.</li>
+        <li>Write permission lasts only for the current run and is locked again next time. Read-only mode does not modify SteamVR.</li>
         <li>Precise calibration tests the current value, -10%, and +10%, then restores the original value.</li>
         <li>The panel always restores the startup value on exit; this safety behavior can no longer be disabled in the UI.</li>
         <li>Some games only read a new resolution after restarting.</li>
         <li><b>Refresh-rate division changes the dynamic-resolution budget; it is not a game frame limiter.</b> Actual frame rate still depends on the game and SteamVR reprojection.</li>
-        <li>Basic mode shows core controls only. Thresholds, steps, range, one-step mode, precise calibration, policy migration, and manual controls are under Advanced mode.</li>
+        <li>“Resolution adjustment range and rules” are not rewritten automatically; only SteamVR resolution changes. Rules, one-step mode, precise calibration, policy migration, and manual controls are under Advanced mode.</li>
       </ul>
     </article>
   </section>
@@ -132,7 +132,7 @@
       <ul>
         <li>运行日志：程序目录下的 <code>logs</code>。</li>
         <li>本机校准：<code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\strategy-store.json</code>。</li>
-        <li>匿名采集数据：<code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\shared-telemetry</code>；自动上传失败不会删除本地记录。</li>
+        <li>匿名采集数据：<code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\shared-telemetry</code>；自动上传按 25 条或 15 分钟合并，限流或失败不会删除本地记录。</li>
       </ul>
       <h3>常见问题</h3>
       <ul>
@@ -153,7 +153,7 @@
       <ul>
         <li>Runtime logs: <code>logs</code> beside the application.</li>
         <li>Local calibration: <code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\strategy-store.json</code>.</li>
-        <li>Anonymous collection data: <code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\shared-telemetry</code>. Failed automatic uploads do not delete local records.</li>
+        <li>Anonymous collection data: <code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\shared-telemetry</code>. Automatic uploads batch 25 records or wait 15 minutes; rate limits and failures do not delete local records.</li>
       </ul>
       <h3>Common issues</h3>
       <ul>

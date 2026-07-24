@@ -122,9 +122,18 @@ def overlay_rows(data: dict[str, object], visible_fields: list[str]) -> list[tup
         application_fps = min(application_fps, refresh_hz)
     reprojection = float(data.get("reprojection_pct", 0.0))
     action = str(data.get("decision", "hold")).upper()
+    reason = str(data.get("reason", ""))
+    observation_phase = str(data.get("observation_phase", ""))
     adaptive_frozen = bool(str(data.get("adaptive_frozen_reason", "")).strip())
     if adaptive_frozen:
         action = "FROZEN"
+    elif action == "HOLD":
+        if observation_phase == "pre_up_stable" or "性能余量观察中" in reason:
+            action = "WAIT"
+        elif "冷却中" in reason:
+            action = "COOLDOWN"
+        elif "已到" in reason and ("上限" in reason or "下限" in reason):
+            action = "LIMIT"
     vrc_world = str(data.get("vrc_world_short", ""))
     vrc_population = int(data.get("vrc_population", 0))
     vrc_ready = bool(data.get("vrc_context_ready", False))
@@ -170,7 +179,7 @@ def overlay_rows(data: dict[str, object], visible_fields: list[str]) -> list[tup
             f"{action}  {scale}% > {proposed}%",
             (
                 QColor("#FFD166")
-                if action == "FROZEN"
+                if action in {"FROZEN", "WAIT", "COOLDOWN"}
                 else QColor("#63E6BE")
                 if action == "UP"
                 else QColor("#FF9D66")
