@@ -158,6 +158,46 @@ class IngestTests(unittest.TestCase):
 
         self.assertEqual(raised.exception.retry_after_seconds, 3_599)
 
+    def test_worker_client_key_is_used_instead_of_shared_proxy_ip(self) -> None:
+        client_key = "a" * 64
+        path, digest = self.write_archive([valid_record()])
+        _manifest, records = ingest_service.validate_archive(path)
+        ingest_service.store_batch(
+            path,
+            digest,
+            path.stat().st_size,
+            records,
+            "2a06:98c0:3600::103",
+            "s" * 64,
+            client_key,
+        )
+
+        with closing(ingest_service.database()) as connection:
+            stored_key = connection.execute(
+                "SELECT source_ip_hash FROM batches WHERE sha256=?",
+                (digest,),
+            ).fetchone()[0]
+        self.assertEqual(stored_key, client_key)
+
+    def test_invalid_worker_client_key_is_rejected(self) -> None:
+        with self.assertRaisesRegex(
+            ingest_service.ValidationError,
+            "X-FramePilot-Client-Key",
+        ):
+            ingest_service.source_rate_key(
+                "not-a-valid-key",
+                "2a06:98c0:3600::103",
+                "s" * 64,
+            )
+
+    def test_missing_worker_client_key_keeps_legacy_ip_hash_fallback(self) -> None:
+        source_ip = "203.0.113.10"
+        secret = "s" * 64
+        self.assertEqual(
+            ingest_service.source_rate_key("", source_ip, secret),
+            ingest_service.hash_source_ip(source_ip, secret),
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

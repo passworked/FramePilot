@@ -274,6 +274,15 @@ def hash_source_ip(value: str, secret: str) -> str:
     ).hexdigest()
 
 
+def source_rate_key(supplied_key: str, source_ip: str, secret: str) -> str:
+    normalized = supplied_key.strip().casefold()
+    if normalized:
+        if not re.fullmatch(r"[0-9a-f]{64}", normalized):
+            raise ValidationError("Invalid X-FramePilot-Client-Key")
+        return normalized
+    return hash_source_ip(source_ip, secret)
+
+
 def rate_limit(connection: sqlite3.Connection, ip_hash: str, upload_bytes: int) -> None:
     hour_bucket = int(time.time() // 3600)
     connection.execute(
@@ -334,6 +343,7 @@ def store_batch(
     records: list[dict[str, object]],
     source_ip: str,
     secret: str,
+    client_key: str = "",
 ) -> dict[str, object]:
     with BATCH_STORE_LOCK:
         return _store_batch_locked(
@@ -343,6 +353,7 @@ def store_batch(
             records,
             source_ip,
             secret,
+            client_key,
         )
 
 
@@ -353,6 +364,7 @@ def _store_batch_locked(
     records: list[dict[str, object]],
     source_ip: str,
     secret: str,
+    client_key: str,
 ) -> dict[str, object]:
     batch_id = f"batch_{sha256[:32]}"
     object_key = f"sha256/{sha256[:2]}/{sha256[2:4]}/{sha256}.zip"
@@ -360,7 +372,7 @@ def _store_batch_locked(
     contributor_id = str(records[0]["anonymous_contributor_id"])
     if any(str(record["anonymous_contributor_id"]) != contributor_id for record in records):
         raise ValidationError("A batch may contain only one anonymous contributor")
-    ip_hash = hash_source_ip(source_ip, secret)
+    ip_hash = source_rate_key(client_key, source_ip, secret)
     received_at = int(time.time())
     with closing(database()) as connection:
         with connection:
@@ -550,6 +562,7 @@ class Handler(BaseHTTPRequestHandler):
             source_ip = self.headers.get(
                 "CF-Connecting-IP", self.client_address[0]
             ).strip()
+            client_key = self.headers.get("X-FramePilot-Client-Key", "")
             result = store_batch(
                 temporary_path,
                 actual_sha256,
@@ -557,6 +570,7 @@ class Handler(BaseHTTPRequestHandler):
                 records,
                 source_ip,
                 secret,
+                client_key,
             )
             temporary_path = None
             self.send_json(HTTPStatus.OK, result)

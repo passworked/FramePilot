@@ -7,6 +7,9 @@ The origin stores immutable ZIP batches under
 The Python service listens only on `127.0.0.1:8787`. A Cloudflare Tunnel
 publishes a dedicated origin hostname, while the public Worker injects the
 origin secret. Direct uploads to the tunnel hostname are rejected.
+The Worker also converts the visitor address into an HMAC rate-limit key
+before forwarding the request. The origin uses that opaque key to keep
+contributors on separate limits without storing their source addresses.
 
 Privacy-sensitive fields, malformed archives, oversized uploads, invalid
 hashes, and unsupported schemas are rejected before indexing.
