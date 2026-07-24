@@ -28,6 +28,7 @@ LOG_DISCOVERY_INTERVAL_SECONDS = 1.0
 PROFILE_SAVE_INTERVAL_SECONDS = 5.0
 SAFE_STREAK_SAMPLES = 8
 PRESSURE_STREAK_SAMPLES = 3
+PROFILE_SCHEMA_VERSION = 2
 
 
 def population_bucket(population: int) -> str:
@@ -205,7 +206,10 @@ class VrcResolutionProfileStore:
 
     def __init__(self, path: Path) -> None:
         self.path = path
-        self.data: dict[str, object] = {"schema_version": 1, "profiles": {}}
+        self.data: dict[str, object] = {
+            "schema_version": PROFILE_SCHEMA_VERSION,
+            "profiles": {},
+        }
         self.safe_streaks: dict[str, tuple[int, int]] = {}
         self.pressure_streaks: dict[str, tuple[int, int]] = {}
         self.last_save_at = -1e9
@@ -215,10 +219,37 @@ class VrcResolutionProfileStore:
     def _load(self) -> None:
         try:
             loaded = json.loads(self.path.read_text(encoding="utf-8"))
-            if isinstance(loaded, dict) and loaded.get("schema_version") == 1:
+            if not isinstance(loaded, dict):
+                return
+            if loaded.get("schema_version") == PROFILE_SCHEMA_VERSION:
                 self.data = loaded
+            elif loaded.get("schema_version") == 1:
+                self.data = self._migrate_v1(loaded)
+                self.dirty = True
         except (OSError, ValueError, TypeError):
             pass
+
+    @staticmethod
+    def _migrate_v1(loaded: dict[str, object]) -> dict[str, object]:
+        """Quarantine unsafe evidence that could be based only on mispresented."""
+        profiles = loaded.get("profiles")
+        if isinstance(profiles, dict):
+            for hardware in profiles.values():
+                if not isinstance(hardware, dict):
+                    continue
+                for profile in hardware.values():
+                    if not isinstance(profile, dict):
+                        continue
+                    unsafe_scale = int(profile.get("unsafe_scale", 0))
+                    pressure_samples = int(profile.get("pressure_samples", 0))
+                    if unsafe_scale > 0:
+                        profile["legacy_v1_unsafe_scale"] = unsafe_scale
+                    if pressure_samples > 0:
+                        profile["legacy_v1_pressure_samples"] = pressure_samples
+                    profile["unsafe_scale"] = 0
+                    profile["pressure_samples"] = 0
+        loaded["schema_version"] = PROFILE_SCHEMA_VERSION
+        return loaded
 
     @staticmethod
     def profile_key(world_id: str, bucket: str, cadence: str) -> str:
@@ -283,13 +314,11 @@ class VrcResolutionProfileStore:
             and cpu_ms <= budget_ms * 0.92
             and reprojection_pct < 3.0
             and dropped == 0
-            and mispresented == 0
         )
         pressure = (
             gpu_ms >= budget_ms * 0.92
             or reprojection_pct >= 3.0
             or dropped > 0
-            or mispresented > 0
         )
         profile["samples"] = int(profile.get("samples", 0)) + 1
         if stable:
