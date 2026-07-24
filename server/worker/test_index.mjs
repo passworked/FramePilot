@@ -34,7 +34,7 @@ test("upload forwards a per-client anonymous rate key", async () => {
       ),
       {
         ORIGIN_URL: "https://origin-ingest.example.com",
-        ORIGIN_SECRET: secret,
+        ORIGIN_AUTH_SECRET: secret,
       },
     );
 
@@ -70,7 +70,7 @@ test("upload without a Cloudflare client address is rejected", async () => {
     ),
     {
       ORIGIN_URL: "https://origin-ingest.example.com",
-      ORIGIN_SECRET: "s".repeat(64),
+      ORIGIN_AUTH_SECRET: "s".repeat(64),
     },
   );
 
