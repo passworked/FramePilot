@@ -53,6 +53,12 @@ class ValidationError(ValueError):
     pass
 
 
+class RateLimitError(PermissionError):
+    def __init__(self, message: str, retry_after_seconds: int) -> None:
+        super().__init__(message)
+        self.retry_after_seconds = max(1, int(retry_after_seconds))
+
+
 def database() -> sqlite3.Connection:
     connection = sqlite3.connect(DB_PATH, timeout=15.0)
     connection.row_factory = sqlite3.Row
@@ -290,7 +296,8 @@ def rate_limit(connection: sqlite3.Connection, ip_hash: str, upload_bytes: int) 
     ).fetchone()
     assert row is not None
     if int(row["requests"]) > 30 or int(row["uploaded_bytes"]) > 100 * 1024 * 1024:
-        raise PermissionError("Hourly upload limit exceeded")
+        retry_after = max(1, 3600 - (int(time.time()) % 3600))
+        raise RateLimitError("Hourly upload limit exceeded", retry_after)
     connection.execute("DELETE FROM hourly_limits WHERE hour_bucket < ?", (hour_bucket - 48,))
 
 
@@ -464,13 +471,20 @@ class Handler(BaseHTTPRequestHandler):
             flush=True,
         )
 
-    def send_json(self, status: HTTPStatus, payload: dict[str, object]) -> None:
+    def send_json(
+        self,
+        status: HTTPStatus,
+        payload: dict[str, object],
+        headers: dict[str, str] | None = None,
+    ) -> None:
         body = json.dumps(payload, separators=(",", ":")).encode("utf-8")
         self.send_response(status)
         self.send_header("Content-Type", "application/json")
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")
         self.send_header("X-Content-Type-Options", "nosniff")
+        for name, value in (headers or {}).items():
+            self.send_header(name, value)
         self.end_headers()
         self.wfile.write(body)
 
@@ -546,10 +560,16 @@ class Handler(BaseHTTPRequestHandler):
             )
             temporary_path = None
             self.send_json(HTTPStatus.OK, result)
-        except PermissionError as exc:
+        except RateLimitError as exc:
             self.send_json(
                 HTTPStatus.TOO_MANY_REQUESTS,
-                {"ok": False, "error": "rate_limited", "detail": str(exc)},
+                {
+                    "ok": False,
+                    "error": "rate_limited",
+                    "detail": str(exc),
+                    "retry_after_seconds": exc.retry_after_seconds,
+                },
+                {"Retry-After": str(exc.retry_after_seconds)},
             )
         except (ValidationError, ValueError) as exc:
             self.send_json(

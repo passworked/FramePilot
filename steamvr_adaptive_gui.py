@@ -59,7 +59,9 @@ from steamvr_core import (
 APP_VERSION = "0.7.4"
 TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
 ONBOARDING_REVISION = 2
-AUTO_UPLOAD_RETRY_SECONDS = 300
+AUTO_UPLOAD_MIN_INTERVAL_SECONDS = 15 * 60
+AUTO_UPLOAD_RECORD_THRESHOLD = 25
+AUTO_UPLOAD_MAX_BACKOFF_SECONDS = 2 * 60 * 60
 
 OVERLAY_HOST = "127.0.0.1"
 OVERLAY_PORT = 39421
@@ -94,6 +96,37 @@ def setting_bool(settings: QSettings, key: str, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def setting_number(settings: QSettings, key: str, default: float = 0.0) -> float:
+    try:
+        return float(settings.value(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def auto_upload_due(
+    records: int,
+    uploaded_records: int,
+    now: float,
+    last_attempt_at: float,
+    next_allowed_at: float,
+    *,
+    force: bool = False,
+) -> tuple[bool, float]:
+    pending = max(0, int(records) - int(uploaded_records))
+    if pending <= 0:
+        return False, 0.0
+    if now < next_allowed_at:
+        return False, next_allowed_at
+    interval_due_at = (
+        last_attempt_at + AUTO_UPLOAD_MIN_INTERVAL_SECONDS
+        if last_attempt_at > 0.0
+        else now
+    )
+    if force or pending >= AUTO_UPLOAD_RECORD_THRESHOLD or now >= interval_due_at:
+        return True, now
+    return False, interval_due_at
 
 
 def compare_ab_results(results: list[dict[str, object]]) -> dict[str, object] | None:
@@ -744,7 +777,14 @@ class MonitorWorker(QObject):
         try:
             result = self.passive_collector.upload_pending(TELEMETRY_UPLOAD_ENDPOINT)
         except Exception as exc:
-            result = {"ok": False, "error": str(exc)}
+            result = {
+                "ok": False,
+                "error": str(exc),
+                "http_status": int(getattr(exc, "http_status", 0)),
+                "retry_after_seconds": int(
+                    getattr(exc, "retry_after_seconds", 0)
+                ),
+            }
         finally:
             with self._collection_upload_lock:
                 self._collection_upload_active = False
@@ -1083,11 +1123,38 @@ class MainWindow(QMainWindow):
         self.last_collection_status: dict[str, object] = {}
         self._collection_uploading = False
         self._collection_upload_is_automatic = False
-        self._auto_upload_last_attempted_records = 0
         self.settings = QSettings("OpenAI-Codex", "SteamVRAdaptiveResolution")
+        self._auto_upload_last_success_records = int(
+            setting_number(
+                self.settings,
+                "collection/auto_upload_last_success_records",
+                0,
+            )
+        )
+        self._auto_upload_last_attempt_at = setting_number(
+            self.settings,
+            "collection/auto_upload_last_attempt_at",
+            0.0,
+        )
+        self._auto_upload_next_allowed_at = setting_number(
+            self.settings,
+            "collection/auto_upload_next_allowed_at",
+            0.0,
+        )
+        self._upload_rate_limited_until = setting_number(
+            self.settings,
+            "collection/upload_rate_limited_until",
+            0.0,
+        )
+        self._auto_upload_failure_count = int(
+            setting_number(
+                self.settings,
+                "collection/auto_upload_failure_count",
+                0,
+            )
+        )
         self._auto_upload_retry_timer = QTimer(self)
         self._auto_upload_retry_timer.setSingleShot(True)
-        self._auto_upload_retry_timer.setInterval(AUTO_UPLOAD_RETRY_SECONDS * 1000)
         self._auto_upload_retry_timer.timeout.connect(
             lambda: self._maybe_auto_upload(force=True)
         )
@@ -1548,8 +1615,52 @@ class MainWindow(QMainWindow):
         if not enabled:
             self._auto_upload_retry_timer.stop()
             return
-        self._auto_upload_last_attempted_records = 0
         QTimer.singleShot(0, self._maybe_auto_upload)
+
+    def _persist_auto_upload_state(self) -> None:
+        values = {
+            "auto_upload_last_success_records": self._auto_upload_last_success_records,
+            "auto_upload_last_attempt_at": self._auto_upload_last_attempt_at,
+            "auto_upload_next_allowed_at": self._auto_upload_next_allowed_at,
+            "upload_rate_limited_until": self._upload_rate_limited_until,
+            "auto_upload_failure_count": self._auto_upload_failure_count,
+        }
+        for key, value in values.items():
+            self.settings.setValue(f"collection/{key}", value)
+        self.settings.sync()
+
+    def _upload_cooldown_remaining(self) -> int:
+        return max(
+            0,
+            math.ceil(self._upload_rate_limited_until - time.time()),
+        )
+
+    def _refresh_collection_upload_button(self) -> None:
+        if self._collection_uploading:
+            self.collection_upload_button.setText(
+                "Uploading…" if self.language == "en" else "正在上传…"
+            )
+            self.collection_upload_button.setEnabled(False)
+            return
+        remaining = self._upload_cooldown_remaining()
+        if remaining > 0:
+            minutes = max(1, math.ceil(remaining / 60))
+            self.collection_upload_button.setText(
+                f"Retry in {minutes} min" if self.language == "en" else f"{minutes} 分钟后重试"
+            )
+            self.collection_upload_button.setEnabled(False)
+            return
+        self.collection_upload_button.setText(self.tr("上传共享数据"))
+        self.collection_upload_button.setEnabled(
+            int(self.last_collection_status.get("records", 0)) > 0
+        )
+
+    def _schedule_auto_upload(self, wake_at: float) -> None:
+        if wake_at <= 0.0 or not self.collection_auto_upload_check.isChecked():
+            return
+        delay_ms = max(1_000, math.ceil((wake_at - time.time()) * 1000))
+        self._auto_upload_retry_timer.start(min(delay_ms, 2_147_000_000))
+        self._refresh_collection_upload_button()
 
     def update_collection_status(self, data: dict) -> None:
         self.last_collection_status = dict(data)
@@ -1574,9 +1685,7 @@ class MainWindow(QMainWindow):
         self.collection_status_label.setText(text)
         has_records = int(data.get("records", 0)) > 0
         self.collection_export_button.setEnabled(has_records)
-        self.collection_upload_button.setEnabled(
-            has_records and not self._collection_uploading
-        )
+        self._refresh_collection_upload_button()
         records_path = str(data.get("records_path", ""))
         self.collection_status_label.setToolTip(records_path)
         self._maybe_auto_upload()
@@ -1591,11 +1700,25 @@ class MainWindow(QMainWindow):
         records = int(self.last_collection_status.get("records", 0))
         if records <= 0:
             return
-        if not force and records <= self._auto_upload_last_attempted_records:
-            return
-        self._auto_upload_last_attempted_records = max(
-            self._auto_upload_last_attempted_records, records
+        if records < self._auto_upload_last_success_records:
+            self._auto_upload_last_success_records = 0
+            self._persist_auto_upload_state()
+        now = time.time()
+        next_allowed = max(
+            self._auto_upload_next_allowed_at,
+            self._upload_rate_limited_until,
         )
+        due, wake_at = auto_upload_due(
+            records,
+            self._auto_upload_last_success_records,
+            now,
+            self._auto_upload_last_attempt_at,
+            next_allowed,
+            force=force,
+        )
+        if not due:
+            self._schedule_auto_upload(wake_at)
+            return
         self._begin_collection_upload(automatic=True)
 
     def export_collection(self) -> None:
@@ -1639,6 +1762,21 @@ class MainWindow(QMainWindow):
     def upload_collection(self) -> None:
         if self._collection_uploading:
             return
+        remaining = self._upload_cooldown_remaining()
+        if remaining > 0:
+            minutes = max(1, math.ceil(remaining / 60))
+            QMessageBox.information(
+                self,
+                "Upload delayed" if self.language == "en" else "上传暂缓",
+                (
+                    f"The server asked this client to wait. Try again in {minutes} minute(s). "
+                    "Local records are safe and have not been deleted."
+                    if self.language == "en"
+                    else f"服务器要求暂缓上传，请在约 {minutes} 分钟后重试。"
+                    "本地记录仍安全保留，没有被删除。"
+                ),
+            )
+            return
         if self.language == "en":
             title = "Upload sharing data"
             message = (
@@ -1674,10 +1812,14 @@ class MainWindow(QMainWindow):
             return
         self._collection_uploading = True
         self._collection_upload_is_automatic = automatic
-        self.collection_upload_button.setEnabled(False)
-        self.collection_upload_button.setText(
-            "Uploading…" if self.language == "en" else "正在上传…"
-        )
+        if automatic:
+            now = time.time()
+            self._auto_upload_last_attempt_at = now
+            self._auto_upload_next_allowed_at = (
+                now + AUTO_UPLOAD_MIN_INTERVAL_SECONDS
+            )
+            self._persist_auto_upload_state()
+        self._refresh_collection_upload_button()
         self.append_event(
             "info",
             "开始自动上传新增匿名记录" if automatic else "开始上传匿名共享数据",
@@ -1690,21 +1832,36 @@ class MainWindow(QMainWindow):
         )
         self._collection_uploading = False
         self._collection_upload_is_automatic = False
-        self.collection_upload_button.setText(self.tr("上传共享数据"))
-        self.collection_upload_button.setEnabled(
-            int(self.last_collection_status.get("records", 0)) > 0
-        )
         if not bool(data.get("ok", False)):
             error = str(data.get("error", "Unknown error"))
-            self.append_event("error", f"匿名共享数据上传失败: {error}")
+            status = int(data.get("http_status", 0))
+            retry_after = int(data.get("retry_after_seconds", 0))
+            self._auto_upload_failure_count += 1
+            fallback = min(
+                AUTO_UPLOAD_MAX_BACKOFF_SECONDS,
+                AUTO_UPLOAD_MIN_INTERVAL_SECONDS
+                * (2 ** min(3, self._auto_upload_failure_count - 1)),
+            )
+            wait_seconds = retry_after if retry_after > 0 else fallback
+            now = time.time()
+            self._auto_upload_next_allowed_at = now + wait_seconds
+            if status == 429:
+                self._upload_rate_limited_until = now + wait_seconds
+            self._persist_auto_upload_state()
+            minutes = max(1, math.ceil(wait_seconds / 60))
+            friendly = (
+                f"Upload is temporarily delayed; local records are safe. Retrying in about {minutes} minute(s)."
+                if self.language == "en"
+                else f"上传暂时受限，本地记录仍安全保留；约 {minutes} 分钟后重试。"
+            )
+            self.append_event("warning", friendly)
+            self._schedule_auto_upload(self._auto_upload_next_allowed_at)
             if automatic:
-                if self.collection_auto_upload_check.isChecked():
-                    self._auto_upload_retry_timer.start()
                 return
             QMessageBox.warning(
                 self,
                 "Upload failed" if self.language == "en" else "上传失败",
-                error,
+                f"{friendly}\n\n{error}",
             )
             return
         batches = int(data.get("batches", 0))
@@ -1712,6 +1869,19 @@ class MainWindow(QMainWindow):
         duplicates = int(data.get("duplicate_records", 0))
         has_more = bool(data.get("has_more", False))
         self._auto_upload_retry_timer.stop()
+        now = time.time()
+        records = int(self.last_collection_status.get("records", 0))
+        self._auto_upload_last_success_records = (
+            max(0, records - 1) if has_more else records
+        )
+        self._auto_upload_last_attempt_at = now
+        self._auto_upload_next_allowed_at = (
+            now + AUTO_UPLOAD_MIN_INTERVAL_SECONDS
+        )
+        self._upload_rate_limited_until = 0.0
+        self._auto_upload_failure_count = 0
+        self._persist_auto_upload_state()
+        self._refresh_collection_upload_button()
         if batches == 0:
             detail = (
                 "No new records need uploading."
@@ -1737,9 +1907,7 @@ class MainWindow(QMainWindow):
         self.append_event("success", detail.replace("\n", " "))
         if automatic:
             if has_more and self.collection_auto_upload_check.isChecked():
-                QTimer.singleShot(
-                    1000, lambda: self._maybe_auto_upload(force=True)
-                )
+                self._schedule_auto_upload(self._auto_upload_next_allowed_at)
             return
         QMessageBox.information(
             self,

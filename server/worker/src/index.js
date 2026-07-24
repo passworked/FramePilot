@@ -81,13 +81,18 @@ export default {
         redirect: "manual",
       },
     );
+    const responseHeaders = {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    };
+    const retryAfter = originResponse.headers.get("retry-after");
+    if (retryAfter) {
+      responseHeaders["retry-after"] = retryAfter;
+    }
     return new Response(originResponse.body, {
       status: originResponse.status,
-      headers: {
-        "content-type": "application/json",
-        "cache-control": "no-store",
-        "x-content-type-options": "nosniff",
-      },
+      headers: responseHeaders,
     });
   },
 };

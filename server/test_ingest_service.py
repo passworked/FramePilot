@@ -148,6 +148,16 @@ class IngestTests(unittest.TestCase):
         )
         self.assertTrue(expected.exists())
 
+    def test_rate_limit_reports_seconds_until_next_hour(self) -> None:
+        with closing(ingest_service.database()) as connection:
+            with patch.object(ingest_service.time, "time", return_value=3_601.0):
+                for _index in range(30):
+                    ingest_service.rate_limit(connection, "source", 1)
+                with self.assertRaises(ingest_service.RateLimitError) as raised:
+                    ingest_service.rate_limit(connection, "source", 1)
+
+        self.assertEqual(raised.exception.retry_after_seconds, 3_599)
+
 
 if __name__ == "__main__":
     unittest.main()

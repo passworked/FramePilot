@@ -378,6 +378,19 @@ class VrcResolutionProfileStore:
         return min(1.0, int(profile.get("safe_evidence", 0)) / 30.0)
 
 
+class TelemetryUploadError(RuntimeError):
+    def __init__(
+        self,
+        message: str,
+        *,
+        http_status: int = 0,
+        retry_after_seconds: int = 0,
+    ) -> None:
+        super().__init__(message)
+        self.http_status = max(0, int(http_status))
+        self.retry_after_seconds = max(0, int(retry_after_seconds))
+
+
 class PassiveVrcDataCollector:
     """Builds privacy-preserving, upload-ready aggregates during normal play."""
 
@@ -995,9 +1008,27 @@ class PassiveVrcDataCollector:
                 body = response.read()
         except urllib.error.HTTPError as exc:
             detail = exc.read().decode("utf-8", errors="replace")
-            raise RuntimeError(f"服务器拒绝上传（HTTP {exc.code}）：{detail}") from exc
+            retry_after = 0
+            try:
+                retry_after = int(exc.headers.get("Retry-After", "0"))
+            except (AttributeError, TypeError, ValueError):
+                pass
+            try:
+                error_payload = json.loads(detail)
+                if isinstance(error_payload, dict):
+                    retry_after = max(
+                        retry_after,
+                        int(error_payload.get("retry_after_seconds", 0)),
+                    )
+            except (json.JSONDecodeError, TypeError, ValueError):
+                pass
+            raise TelemetryUploadError(
+                f"服务器拒绝上传（HTTP {exc.code}）：{detail}",
+                http_status=int(exc.code),
+                retry_after_seconds=retry_after,
+            ) from exc
         except urllib.error.URLError as exc:
-            raise RuntimeError(f"无法连接共享服务器：{exc.reason}") from exc
+            raise TelemetryUploadError(f"无法连接共享服务器：{exc.reason}") from exc
         try:
             result = json.loads(body)
         except (UnicodeDecodeError, json.JSONDecodeError) as exc:
