@@ -14,6 +14,7 @@ import sys
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QPointF, QProcess, QRectF, QSettings, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap
@@ -56,7 +57,8 @@ from steamvr_core import (
 )
 
 
-APP_VERSION = "0.7.6"
+APP_VERSION = "0.8.0"
+STEAMVR_LAUNCH_URI = "steam://rungameid/250820"
 TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
 ONBOARDING_REVISION = 3
 AUTO_UPLOAD_MIN_INTERVAL_SECONDS = 15 * 60
@@ -103,6 +105,24 @@ def setting_number(settings: QSettings, key: str, default: float = 0.0) -> float
         return float(settings.value(key, default))
     except (TypeError, ValueError):
         return float(default)
+
+
+def request_steamvr_start(
+    process_checker: Callable[[str], bool] = process_running,
+    url_opener: Callable[[str], object] | None = None,
+) -> tuple[str, str]:
+    """Request SteamVR startup through Steam without assuming an install path."""
+    if process_checker("vrserver.exe"):
+        return "already_running", ""
+    if url_opener is None:
+        url_opener = getattr(os, "startfile", None)
+    if url_opener is None:
+        return "unsupported", "Steam URL launching is unavailable on this platform"
+    try:
+        url_opener(STEAMVR_LAUNCH_URI)
+    except OSError as exc:
+        return "failed", str(exc)
+    return "requested", ""
 
 
 def auto_upload_due(
@@ -182,6 +202,7 @@ ZH_EN = {
     "单步自动调整": "One-step adjustment",
     "连续自适应": "Continuous adaptive",
     "允许修改 SteamVR 分辨率（本次运行）": "Allow SteamVR resolution changes (this session)",
+    "启动 FramePilot VR 时自动启动 SteamVR": "Start SteamVR automatically with FramePilot VR",
     "退出时恢复启动值": "Restore startup value on exit",
     "分辨率调节范围与规则": "Resolution adjustment range and rules",
     "程序只自动改变分辨率，不会自行修改这些规则。": "The app changes only resolution; it does not rewrite these rules.",
@@ -1223,6 +1244,7 @@ class MainWindow(QMainWindow):
         self._setup_tray()
         self._sync_overlay_process()
         self._send_overlay_settings()
+        QTimer.singleShot(0, self._autostart_steamvr_if_enabled)
         QTimer.singleShot(500, self.maybe_show_onboarding)
 
         if screenshot_path is not None:
@@ -1347,6 +1369,18 @@ class MainWindow(QMainWindow):
         target_hint.setWordWrap(True)
         target_hint.setObjectName("Muted")
         mode_layout.addWidget(target_hint)
+        self.steamvr_autostart_check = QCheckBox("启动 FramePilot VR 时自动启动 SteamVR")
+        self.steamvr_autostart_check.setChecked(
+            setting_bool(self.settings, "startup/steamvr_autostart", False)
+        )
+        self.steamvr_autostart_check.setToolTip(
+            "保存此选项；从下次启动 FramePilot VR 起生效。"
+            " / Saves this option and takes effect the next time FramePilot VR starts."
+        )
+        self.steamvr_autostart_check.toggled.connect(
+            self.steamvr_autostart_changed
+        )
+        mode_layout.addWidget(self.steamvr_autostart_check)
         self.arm_check = QCheckBox("允许修改 SteamVR 分辨率（本次运行）")
         self.arm_check.setToolTip(
             "未勾选时只监控和推荐，不会写入 SteamVR。"
@@ -1634,6 +1668,36 @@ class MainWindow(QMainWindow):
         self.settings.sync()
         self._sync_overlay_process()
         self._send_overlay_settings()
+
+    def steamvr_autostart_changed(self, enabled: bool) -> None:
+        self.settings.setValue("startup/steamvr_autostart", bool(enabled))
+        self.settings.sync()
+
+    def _autostart_steamvr_if_enabled(self) -> None:
+        if not self.steamvr_autostart_check.isChecked():
+            return
+        state, detail = request_steamvr_start()
+        if state == "already_running":
+            message = (
+                "SteamVR is already running; automatic startup was skipped"
+                if self.language == "en"
+                else "SteamVR 已在运行，已跳过自动启动"
+            )
+            self.append_event("info", message)
+        elif state == "requested":
+            message = (
+                "Requested Steam to start SteamVR"
+                if self.language == "en"
+                else "已请求 Steam 启动 SteamVR"
+            )
+            self.append_event("success", message)
+        else:
+            prefix = (
+                "Unable to start SteamVR automatically"
+                if self.language == "en"
+                else "无法自动启动 SteamVR"
+            )
+            self.append_event("error", f"{prefix}: {detail}")
 
     def collection_enabled_changed(self, enabled: bool) -> None:
         self.settings.setValue("collection/enabled", bool(enabled))

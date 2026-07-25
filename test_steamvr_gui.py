@@ -4,8 +4,10 @@ import unittest
 
 from steamvr_adaptive_gui import (
     AUTO_UPLOAD_MIN_INTERVAL_SECONDS,
+    STEAMVR_LAUNCH_URI,
     auto_upload_due,
     clear_persisted_write_unlock,
+    request_steamvr_start,
 )
 
 
@@ -72,6 +74,42 @@ class WriteSafetyTests(unittest.TestCase):
 
         self.assertFalse(armed)
         self.assertNotIn("runtime/armed", settings.values)
+
+
+class SteamVRAutostartTests(unittest.TestCase):
+    def test_running_steamvr_does_not_open_uri(self) -> None:
+        opened: list[str] = []
+
+        state, detail = request_steamvr_start(
+            process_checker=lambda _name: True,
+            url_opener=opened.append,
+        )
+
+        self.assertEqual((state, detail), ("already_running", ""))
+        self.assertEqual(opened, [])
+
+    def test_stopped_steamvr_opens_official_steam_uri(self) -> None:
+        opened: list[str] = []
+
+        state, detail = request_steamvr_start(
+            process_checker=lambda _name: False,
+            url_opener=opened.append,
+        )
+
+        self.assertEqual((state, detail), ("requested", ""))
+        self.assertEqual(opened, [STEAMVR_LAUNCH_URI])
+
+    def test_uri_launch_failure_is_reported(self) -> None:
+        def fail_to_open(_uri: str) -> None:
+            raise OSError("no Steam handler")
+
+        state, detail = request_steamvr_start(
+            process_checker=lambda _name: False,
+            url_opener=fail_to_open,
+        )
+
+        self.assertEqual(state, "failed")
+        self.assertEqual(detail, "no Steam handler")
 
 
 if __name__ == "__main__":

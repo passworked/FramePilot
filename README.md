@@ -1,4 +1,4 @@
-# FramePilot VR v0.7
+# FramePilot VR v0.8
 
 这是一个 Windows / SteamVR 动态分辨率可行性验证面板。它读取 OpenVR 帧时序、系统 CPU 与 NVIDIA GPU 占用率，按当前头显刷新率计算帧预算，并为当前场景应用建议或调整 `resolutionScale`。桌面面板与 CLI PoC 共用 `steamvr_core.py`，控制逻辑和写入保护一致。
 
@@ -18,6 +18,7 @@
 
 - 当前游戏、GPU/CPU P95 帧时间、系统 CPU/GPU 占用率和趋势图。
 - 顶部“中文 / English”运行时切换；选择会保存，下次启动自动沿用。
+- 可保存的 SteamVR 自启选项；启用后，FramePilot VR 下次启动时会通过 Steam 请求启动 SteamVR。
 - 可选择原生刷新率或刷新率的 1/2、1/3、1/4 作为动态分辨率帧预算目标。
 - 保守、平衡、激进三套控制预设。
 - 普通模式提供只读和连续自适应；高级模式额外提供单步调整。
