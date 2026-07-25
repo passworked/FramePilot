@@ -50,6 +50,114 @@ OSD_ROW_HEIGHT = 46
 # SteamVR may cache the dimensions of an already-bound OpenGL texture.
 OSD_MAX_ROWS = 12
 OSD_HEIGHT = 22 + OSD_ROW_HEIGHT * OSD_MAX_ROWS + 18
+OSD_TEXT = {
+    "zh": {
+        "APP FRAMERATE": "应用帧率",
+        "HMD REFRESH": "头显刷新率",
+        "GPU LOAD": "GPU 占用",
+        "CPU LOAD": "CPU 占用",
+        "BUDGET": "帧预算",
+        "RESOLUTION": "分辨率",
+        "SCHEDULER": "调度器",
+        "REPROJECTION": "重投影",
+        "VRC CONTEXT": "VRC 场景",
+        "NOT IN VRCHAT": "未进入 VRCHAT",
+        "COUNTING": "统计中",
+        "LEARNED": "已学习",
+        "PLAYERS": "人",
+        "WAITING FOR TELEMETRY": "等待遥测",
+        "NO METRICS SELECTED": "未选择指标",
+    },
+    "ja": {
+        "APP FRAMERATE": "アプリ FPS",
+        "HMD REFRESH": "HMD 更新レート",
+        "GPU LOAD": "GPU 使用率",
+        "CPU LOAD": "CPU 使用率",
+        "BUDGET": "フレーム予算",
+        "RESOLUTION": "解像度",
+        "SCHEDULER": "スケジューラ",
+        "REPROJECTION": "再投影",
+        "VRC CONTEXT": "VRC コンテキスト",
+        "NOT IN VRCHAT": "VRCHAT 外",
+        "COUNTING": "集計中",
+        "LEARNED": "学習済み",
+        "PLAYERS": "人",
+        "WAITING FOR TELEMETRY": "テレメトリ待機中",
+        "NO METRICS SELECTED": "指標未選択",
+    },
+    "ko": {
+        "APP FRAMERATE": "앱 프레임률",
+        "HMD REFRESH": "HMD 주사율",
+        "GPU LOAD": "GPU 사용률",
+        "CPU LOAD": "CPU 사용률",
+        "BUDGET": "프레임 예산",
+        "RESOLUTION": "해상도",
+        "SCHEDULER": "스케줄러",
+        "REPROJECTION": "재투영",
+        "VRC CONTEXT": "VRC 환경",
+        "NOT IN VRCHAT": "VRCHAT 아님",
+        "COUNTING": "집계 중",
+        "LEARNED": "학습됨",
+        "PLAYERS": "명",
+        "WAITING FOR TELEMETRY": "텔레메트리 대기 중",
+        "NO METRICS SELECTED": "선택한 지표 없음",
+    },
+    "fr": {
+        "APP FRAMERATE": "FPS APPLICATION",
+        "HMD REFRESH": "FRÉQUENCE HMD",
+        "GPU LOAD": "CHARGE GPU",
+        "CPU LOAD": "CHARGE CPU",
+        "BUDGET": "BUDGET",
+        "RESOLUTION": "RÉSOLUTION",
+        "SCHEDULER": "PLANIFICATEUR",
+        "REPROJECTION": "REPROJECTION",
+        "VRC CONTEXT": "CONTEXTE VRC",
+        "NOT IN VRCHAT": "HORS VRCHAT",
+        "COUNTING": "COMPTAGE",
+        "LEARNED": "APPRIS",
+        "PLAYERS": "JOUEURS",
+        "WAITING FOR TELEMETRY": "ATTENTE TÉLÉMÉTRIE",
+        "NO METRICS SELECTED": "AUCUNE MESURE",
+    },
+    "de": {
+        "APP FRAMERATE": "APP-BILDRATE",
+        "HMD REFRESH": "HMD-BILDRATE",
+        "GPU LOAD": "GPU-AUSLASTUNG",
+        "CPU LOAD": "CPU-AUSLASTUNG",
+        "BUDGET": "BUDGET",
+        "RESOLUTION": "AUFLÖSUNG",
+        "SCHEDULER": "STEUERUNG",
+        "REPROJECTION": "REPROJEKTION",
+        "VRC CONTEXT": "VRC-KONTEXT",
+        "NOT IN VRCHAT": "NICHT IN VRCHAT",
+        "COUNTING": "ZÄHLUNG",
+        "LEARNED": "GELERNT",
+        "PLAYERS": "SPIELER",
+        "WAITING FOR TELEMETRY": "WARTE AUF TELEMETRIE",
+        "NO METRICS SELECTED": "KEINE METRIKEN",
+    },
+    "es": {
+        "APP FRAMERATE": "FPS DE LA APP",
+        "HMD REFRESH": "REFRESCO HMD",
+        "GPU LOAD": "CARGA GPU",
+        "CPU LOAD": "CARGA CPU",
+        "BUDGET": "PRESUPUESTO",
+        "RESOLUTION": "RESOLUCIÓN",
+        "SCHEDULER": "CONTROLADOR",
+        "REPROJECTION": "REPROYECCIÓN",
+        "VRC CONTEXT": "CONTEXTO VRC",
+        "NOT IN VRCHAT": "FUERA DE VRCHAT",
+        "COUNTING": "CONTANDO",
+        "LEARNED": "APRENDIDO",
+        "PLAYERS": "JUGADORES",
+        "WAITING FOR TELEMETRY": "ESPERANDO TELEMETRÍA",
+        "NO METRICS SELECTED": "SIN MÉTRICAS",
+    },
+}
+
+
+def overlay_text(text: str, language: str) -> str:
+    return OSD_TEXT.get(language, {}).get(text, text)
 
 
 class StatusReporter:
@@ -102,7 +210,11 @@ def _color_for_framerate(application_fps: float, target_fps: float) -> QColor:
     return QColor("#63E6BE")
 
 
-def overlay_rows(data: dict[str, object], visible_fields: list[str]) -> list[tuple[str, str, QColor]]:
+def overlay_rows(
+    data: dict[str, object],
+    visible_fields: list[str],
+    language: str = "en",
+) -> list[tuple[str, str, QColor]]:
     gpu = float(data.get("gpu_p95_ms", 0.0))
     cpu = float(data.get("cpu_p95_ms", 0.0))
     budget = float(data.get("budget_ms", 0.0))
@@ -139,43 +251,68 @@ def overlay_rows(data: dict[str, object], visible_fields: list[str]) -> list[tup
     vrc_ready = bool(data.get("vrc_context_ready", False))
     vrc_safe_scale = int(data.get("vrc_profile_safe_scale", 0))
     if not vrc_world:
-        vrc_context_text = "NOT IN VRCHAT"
+        vrc_context_text = overlay_text("NOT IN VRCHAT", language)
     elif not vrc_ready:
-        vrc_context_text = f"{vrc_world}  /  COUNTING {vrc_population}"
+        vrc_context_text = (
+            f"{vrc_world}  /  {overlay_text('COUNTING', language)} {vrc_population}"
+        )
     else:
-        learned = f"  /  LEARNED {vrc_safe_scale}%" if vrc_safe_scale > 0 else ""
-        vrc_context_text = f"{vrc_world}  /  {vrc_population} PLAYERS{learned}"
+        learned = (
+            f"  /  {overlay_text('LEARNED', language)} {vrc_safe_scale}%"
+            if vrc_safe_scale > 0
+            else ""
+        )
+        vrc_context_text = (
+            f"{vrc_world}  /  {vrc_population} {overlay_text('PLAYERS', language)}"
+            f"{learned}"
+        )
 
     if application_fps > 0.0:
         framerate_row = (
-            "APP FRAMERATE",
+            overlay_text("APP FRAMERATE", language),
             f"{application_fps:.1f} FPS",
             _color_for_framerate(application_fps, target_fps),
         )
     elif refresh_hz > 1.0:
-        framerate_row = ("HMD REFRESH", f"{refresh_hz:g} Hz", QColor("#B8C4D1"))
+        framerate_row = (
+            overlay_text("HMD REFRESH", language),
+            f"{refresh_hz:g} Hz",
+            QColor("#B8C4D1"),
+        )
     else:
-        framerate_row = ("APP FRAMERATE", "n/a", QColor("#B8C4D1"))
+        framerate_row = (
+            overlay_text("APP FRAMERATE", language),
+            "n/a",
+            QColor("#B8C4D1"),
+        )
 
     definitions = {
         "fps": framerate_row,
         "gpu_ms": ("GPU P95", f"{gpu:.2f} ms", _color_for_load(gpu, budget)),
         "cpu_ms": ("CPU P95", f"{cpu:.2f} ms", QColor("#FF9D66")),
         "gpu_util": (
-            "GPU LOAD",
+            overlay_text("GPU LOAD", language),
             "n/a" if system_gpu is None else f"{float(system_gpu):.0f}%",
             QColor("#42D7FF"),
         ),
-        "cpu_util": ("CPU LOAD", f"{system_cpu:.0f}%", QColor("#B8C4D1")),
-        "budget": ("BUDGET", f"{budget:.2f} ms  /  {target_fps:g} FPS", QColor("#FFD166")),
+        "cpu_util": (
+            overlay_text("CPU LOAD", language),
+            f"{system_cpu:.0f}%",
+            QColor("#B8C4D1"),
+        ),
+        "budget": (
+            overlay_text("BUDGET", language),
+            f"{budget:.2f} ms  /  {target_fps:g} FPS",
+            QColor("#FFD166"),
+        ),
         "resolution": (
-            "RESOLUTION",
+            overlay_text("RESOLUTION", language),
             f"{equivalent_width} x {equivalent_height}",
             QColor("#F4F7FB"),
         ),
         "scale": ("STEAMVR", f"{scale}%", QColor("#42D7FF")),
         "decision": (
-            "SCHEDULER",
+            overlay_text("SCHEDULER", language),
             f"{action}  {scale}% > {proposed}%",
             (
                 QColor("#FFD166")
@@ -188,12 +325,12 @@ def overlay_rows(data: dict[str, object], visible_fields: list[str]) -> list[tup
             ),
         ),
         "reprojection": (
-            "REPROJECTION",
+            overlay_text("REPROJECTION", language),
             f"{reprojection:.1f}%",
             QColor("#FF5F6D") if reprojection >= 3.0 else QColor("#63E6BE"),
         ),
         "vrc_context": (
-            "VRC CONTEXT",
+            overlay_text("VRC CONTEXT", language),
             vrc_context_text,
             QColor("#B89CFF") if vrc_ready else QColor("#FFD166"),
         ),
@@ -205,13 +342,26 @@ def render_osd(
     data: dict[str, object] | None,
     visible_fields: list[str],
     canvas: QImage | None = None,
+    language: str = "en",
 ) -> QImage:
     if data is None:
-        rows = [("STEAMVR", "WAITING FOR TELEMETRY", QColor("#FFD166"))]
+        rows = [
+            (
+                "STEAMVR",
+                overlay_text("WAITING FOR TELEMETRY", language),
+                QColor("#FFD166"),
+            )
+        ]
     else:
-        rows = overlay_rows(data, visible_fields)
+        rows = overlay_rows(data, visible_fields, language)
         if not rows:
-            rows = [("OSD", "NO METRICS SELECTED", QColor("#B8C4D1"))]
+            rows = [
+                (
+                    "OSD",
+                    overlay_text("NO METRICS SELECTED", language),
+                    QColor("#B8C4D1"),
+                )
+            ]
 
     width = OSD_WIDTH
     row_height = OSD_ROW_HEIGHT
@@ -229,8 +379,14 @@ def render_osd(
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
     painter.setRenderHint(QPainter.RenderHint.TextAntialiasing)
 
-    font = QFont("Cascadia Mono")
-    font.setStyleHint(QFont.StyleHint.Monospace)
+    font_families = {
+        "zh": "Microsoft YaHei UI",
+        "ja": "Yu Gothic UI",
+        "ko": "Malgun Gothic",
+    }
+    font = QFont(font_families.get(language, "Cascadia Mono"))
+    if language not in {"zh", "ja", "ko"}:
+        font.setStyleHint(QFont.StyleHint.Monospace)
     font.setPixelSize(28)
     font.setWeight(QFont.Weight.DemiBold)
     painter.setFont(font)
@@ -359,6 +515,7 @@ def run_overlay(status_path: Path | None = None) -> int:
     latest: dict[str, object] | None = None
     visible_fields = list(DEFAULT_FIELDS)
     overlay_config = dict(DEFAULT_CONFIG)
+    language = "en"
     last_telemetry_at = 0.0
     texture_uploader = PersistentTextureUploader()
 
@@ -390,7 +547,7 @@ def run_overlay(status_path: Path | None = None) -> int:
                 openvr.k_unTrackedDeviceIndex_Hmd,
                 _head_locked_transform(str(overlay_config["anchor"])),
             )
-            render_canvas = render_osd(latest, visible_fields)
+            render_canvas = render_osd(latest, visible_fields, language=language)
             texture_uploader.submit(overlay, handle, render_canvas)
             last_submit_at = time.monotonic()
             texture_dirty = False
@@ -404,13 +561,23 @@ def run_overlay(status_path: Path | None = None) -> int:
                     now = time.monotonic()
                     if latest is not None and now - last_telemetry_at >= STALE_TELEMETRY_SECONDS:
                         latest = None
-                        render_canvas = render_osd(None, visible_fields, render_canvas)
+                        render_canvas = render_osd(
+                            None,
+                            visible_fields,
+                            render_canvas,
+                            language,
+                        )
                         texture_uploader.submit(overlay, handle, render_canvas)
                         last_submit_at = now
                         texture_dirty = False
                         reporter.emit("waiting_scene", "遥测已中断，等待场景应用")
                     elif texture_dirty and now - last_submit_at >= MIN_TEXTURE_UPDATE_SECONDS:
-                        render_canvas = render_osd(latest, visible_fields, render_canvas)
+                        render_canvas = render_osd(
+                            latest,
+                            visible_fields,
+                            render_canvas,
+                            language,
+                        )
                         texture_uploader.submit(overlay, handle, render_canvas)
                         last_submit_at = now
                         texture_dirty = False
@@ -421,6 +588,11 @@ def run_overlay(status_path: Path | None = None) -> int:
                 payload = message.get("data")
                 fields = message.get("visible_fields")
                 config = message.get("config")
+                requested_language = str(message.get("language", language))
+                if requested_language in {"zh", "en", "ja", "ko", "fr", "de", "es"}:
+                    if requested_language != language:
+                        language = requested_language
+                        texture_dirty = True
                 if isinstance(payload, dict):
                     latest = payload
                     last_telemetry_at = time.monotonic()
@@ -447,7 +619,12 @@ def run_overlay(status_path: Path | None = None) -> int:
                         )
                 now = time.monotonic()
                 if texture_dirty and now - last_submit_at >= MIN_TEXTURE_UPDATE_SECONDS:
-                    render_canvas = render_osd(latest, visible_fields, render_canvas)
+                    render_canvas = render_osd(
+                        latest,
+                        visible_fields,
+                        render_canvas,
+                        language,
+                    )
                     texture_uploader.submit(overlay, handle, render_canvas)
                     last_submit_at = now
                     texture_dirty = False

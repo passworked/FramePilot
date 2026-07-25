@@ -95,6 +95,18 @@ class ApplicationFramerateTests(unittest.TestCase):
 
         self.assertEqual(value, "WAIT  71% > 71%")
 
+    def test_osd_labels_follow_selected_language(self) -> None:
+        data = {
+            "refresh_hz": 72.0,
+            "application_fps": 72.0,
+            "target_fps": 72.0,
+            "budget_ms": 1000.0 / 72.0,
+        }
+
+        label, _value, _color = overlay_rows(data, ["fps"], language="ja")[0]
+
+        self.assertEqual(label, "アプリ FPS")
+
 
 if __name__ == "__main__":
     unittest.main()

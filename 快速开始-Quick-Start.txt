@@ -1,4 +1,4 @@
-FramePilot VR v0.8.0
+FramePilot VR v0.9.0
 快速开始 / QUICK START
 ========================================
 
@@ -16,7 +16,7 @@ FramePilot VR v0.8.0
 1. 将 ZIP 解压到桌面、文档或其他可写目录。
 2. 启动头显软件、SteamVR 和 VR 游戏。
 3. 双击 start_panel.bat，或直接运行 FramePilotVR.exe。
-4. 在顶部选择“中文”。
+4. 在顶部选择“简体中文”；也可选择 English、日本語、한국어、Français、Deutsch 或 Español。
 5. 程序每次启动都会重新锁定写入。保持“只读监控”，确认顶部显示“不会修改 SteamVR”。
 6. 若希望以后由 FramePilot VR 启动 SteamVR，勾选“启动 FramePilot VR 时自动启动 SteamVR”；保存后从下次启动生效。
 7. 选择原生刷新率，或刷新率的 1/2、1/3、1/4。72 Hz 会自动对应 72/36/24/18 FPS 预算。
@@ -53,7 +53,7 @@ How to start
 1. Extract the ZIP to Desktop, Documents, or another writable folder.
 2. Start the headset software, SteamVR, and the VR game.
 3. Double-click start_panel.bat, or run FramePilotVR.exe directly.
-4. Select “English” at the top of the panel.
+4. Select “English” at the top of the panel. Simplified Chinese, Japanese, Korean, French, German, and Spanish are also available.
 5. Writes are locked again every time the app starts. Keep “Read-only monitor” selected and confirm that the top banner says SteamVR will not be modified.
 6. To have FramePilot VR launch SteamVR in the future, enable “Start SteamVR automatically with FramePilot VR.” The saved option takes effect on the next launch.
 7. Select the native refresh rate or 1/2, 1/3, or 1/4 of it. At 72 Hz these become 72/36/24/18 FPS budgets automatically.

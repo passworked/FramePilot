@@ -4,6 +4,7 @@ import unittest
 
 from steamvr_adaptive_gui import (
     AUTO_UPLOAD_MIN_INTERVAL_SECONDS,
+    SHOW_AB_EXPERIMENT_UI,
     STEAMVR_LAUNCH_URI,
     auto_upload_due,
     clear_persisted_write_unlock,
@@ -110,6 +111,11 @@ class SteamVRAutostartTests(unittest.TestCase):
 
         self.assertEqual(state, "failed")
         self.assertEqual(detail, "no Steam handler")
+
+
+class ProductionUiTests(unittest.TestCase):
+    def test_ab_experiment_controls_are_hidden(self) -> None:
+        self.assertFalse(SHOW_AB_EXPERIMENT_UI)
 
 
 if __name__ == "__main__":

@@ -1,8 +1,19 @@
+param(
+    [string]$DistPath = ''
+)
+
 $ErrorActionPreference = 'Stop'
 
 $sourceDir = Split-Path -Parent $MyInvocation.MyCommand.Path
 $venvDir = Join-Path $sourceDir '.venv'
 $python = Join-Path $venvDir 'Scripts\python.exe'
+$appIcon = Join-Path $sourceDir 'assets\framepilot-vr.ico'
+$appIconPng = Join-Path $sourceDir 'assets\framepilot-vr-icon.png'
+$distDir = if ($DistPath) {
+    [IO.Path]::GetFullPath((Join-Path $sourceDir $DistPath))
+} else {
+    Join-Path $sourceDir 'dist'
+}
 
 if (-not (Test-Path -LiteralPath $python)) {
     python -m venv $venvDir
@@ -17,13 +28,14 @@ $openvrDll = & $python -c "import pathlib, openvr; print(pathlib.Path(openvr.__f
     --onedir `
     --console `
     --name FramePilotVRCLI `
-    --distpath (Join-Path $sourceDir 'dist') `
+    --icon $appIcon `
+    --distpath $distDir `
     --workpath (Join-Path $sourceDir 'build') `
     --specpath $sourceDir `
     --add-binary "$openvrDll;openvr" `
     (Join-Path $sourceDir 'steamvr_adaptive_poc.py')
 
-& (Join-Path $sourceDir 'dist\FramePilotVRCLI\FramePilotVRCLI.exe') --self-test
+& (Join-Path $distDir 'FramePilotVRCLI\FramePilotVRCLI.exe') --self-test
 
 & $python -m PyInstaller `
     --noconfirm `
@@ -31,8 +43,11 @@ $openvrDll = & $python -c "import pathlib, openvr; print(pathlib.Path(openvr.__f
     --onedir `
     --windowed `
     --name FramePilotVR `
-    --distpath (Join-Path $sourceDir 'dist') `
+    --icon $appIcon `
+    --distpath $distDir `
     --workpath (Join-Path $sourceDir 'build-panel') `
     --specpath $sourceDir `
     --add-binary "$openvrDll;openvr" `
+    --add-data "$appIconPng;assets" `
+    --add-data "$(Join-Path $sourceDir 'locales');locales" `
     (Join-Path $sourceDir 'steamvr_adaptive_gui.py')
