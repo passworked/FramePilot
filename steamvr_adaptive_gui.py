@@ -20,6 +20,7 @@ from PySide6.QtCore import QObject, QPointF, QProcess, QRectF, QSettings, Qt, QT
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -58,10 +59,17 @@ from steamvr_core import (
 )
 
 
-APP_VERSION = "0.9.0"
+APP_VERSION = "0.9.1"
 STEAMVR_LAUNCH_URI = "steam://rungameid/250820"
 TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
-ONBOARDING_REVISION = 3
+ONBOARDING_REVISION = 4
+ONBOARDING_PAGE_BUILDERS = (
+    "_language_page",
+    "_quality_page",
+    "_target_page",
+    "_welcome_page",
+)
+ONBOARDING_PAGE_COUNT = len(ONBOARDING_PAGE_BUILDERS)
 AUTO_UPLOAD_MIN_INTERVAL_SECONDS = 15 * 60
 AUTO_UPLOAD_RECORD_THRESHOLD = 25
 AUTO_UPLOAD_MAX_BACKOFF_SECONDS = 2 * 60 * 60
@@ -262,6 +270,9 @@ ZH_EN = {
     "上一步": "Back",
     "下一步": "Next",
     "开始使用": "Get started",
+    "选择你的语言": "Choose Your Language",
+    "选择最适合你的显示语言。之后可以随时在主面板中更改。": "Choose the display language that works best for you. You can change it later in the main panel.",
+    "选择语言后，界面会立即切换。": "The interface updates immediately when you select a language.",
     "请先把串流画质调到最高档": "Set streaming quality to its highest preset first",
     "动态分辨率需要以串流软件提供的最高基础画质为起点，否则面板只能在一个较低的编码分辨率上继续缩放。": "Dynamic resolution should start from the highest base quality offered by your streaming software; otherwise the panel can only scale a lower encoded resolution.",
     "<b>PICO 互联：</b>选择“超高清+”<br><br><b>Virtual Desktop：</b>选择“Monster”<br><br>其他串流软件请选择设备与显卡能够使用的最高画质档。": "<b>PICO Connect:</b> choose “Ultra HD+”<br><br><b>Virtual Desktop:</b> choose “Monster”<br><br>For other streaming software, choose the highest quality preset supported by your device and GPU.",
@@ -659,8 +670,20 @@ class OnboardingDialog(QDialog):
         self.setStyleSheet(
             "QDialog{background:#0B1017;}"
             "QLabel#GuideTitle{font-size:25px;font-weight:700;color:#F4F7FB;}"
-            "QLabel#GuideStep{color:#42D7FF;font-weight:650;}"
+            "QLabel#GuideHeroTitle{font-size:30px;font-weight:700;color:#F7F8FA;}"
+            "QLabel#GuideStep{color:#8E99A8;font-weight:600;}"
             "QLabel#GuideCard{background:#111923;border:1px solid #26384C;border-radius:10px;padding:14px;}"
+            "QPushButton#LanguageChoice{background:#141A22;border:1px solid #2A3442;"
+            "border-radius:14px;padding:15px 18px;color:#F4F7FB;font-size:15px;"
+            "font-weight:600;text-align:left;}"
+            "QPushButton#LanguageChoice:hover{background:#19212B;border-color:#596779;}"
+            "QPushButton#LanguageChoice:checked{background:#0A84FF;border-color:#66B2FF;color:white;}"
+            "QPushButton#GuideNav{background:transparent;border:1px solid #354150;"
+            "border-radius:9px;padding:9px 20px;color:#DDE4EC;font-weight:600;}"
+            "QPushButton#GuideNav:hover{background:#151D27;border-color:#667486;}"
+            "QPushButton#Primary{background:#0A84FF;border:1px solid #0A84FF;"
+            "border-radius:9px;padding:9px 22px;color:white;font-weight:650;}"
+            "QPushButton#Primary:hover{background:#2997FF;border-color:#2997FF;}"
             "QPushButton#Primary:disabled{background:#151C25;border-color:#222C38;color:#5E6A78;}"
         )
 
@@ -669,20 +692,22 @@ class OnboardingDialog(QDialog):
         root.setSpacing(18)
         self.step_label = QLabel()
         self.step_label.setObjectName("GuideStep")
+        self.step_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.step_label)
 
         self.pages = QStackedWidget()
-        self.pages.addWidget(self._quality_page())
-        self.pages.addWidget(self._target_page())
-        self.pages.addWidget(self._welcome_page())
+        for builder_name in ONBOARDING_PAGE_BUILDERS:
+            self.pages.addWidget(getattr(self, builder_name)())
         self.pages.currentChanged.connect(self._page_changed)
         root.addWidget(self.pages, 1)
 
         navigation = QHBoxLayout()
         self.back_button = QPushButton(self.main_window.tr("上一步"))
+        self.back_button.setObjectName("GuideNav")
         self.back_button.clicked.connect(self.previous_page)
         self.next_button = QPushButton(self.main_window.tr("下一步"))
         self.next_button.setObjectName("Primary")
+        self.next_button.setMinimumWidth(104)
         self.next_button.clicked.connect(self.next_page)
         navigation.addWidget(self.back_button)
         navigation.addStretch()
@@ -696,6 +721,67 @@ class OnboardingDialog(QDialog):
         label.setObjectName("GuideTitle")
         label.setWordWrap(True)
         return label
+
+    def _language_page(self) -> QWidget:
+        tr = self.main_window.tr
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 18, 28, 6)
+        layout.setSpacing(12)
+
+        self.language_title = QLabel(tr("选择你的语言"))
+        self.language_title.setObjectName("GuideHeroTitle")
+        self.language_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.language_title.setWordWrap(True)
+        layout.addWidget(self.language_title)
+
+        self.language_subtitle = QLabel(
+            tr("选择最适合你的显示语言。之后可以随时在主面板中更改。")
+        )
+        self.language_subtitle.setObjectName("Muted")
+        self.language_subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.language_subtitle.setWordWrap(True)
+        layout.addWidget(self.language_subtitle)
+        layout.addSpacing(10)
+
+        choices = QGridLayout()
+        choices.setHorizontalSpacing(12)
+        choices.setVerticalSpacing(12)
+        self.language_button_group = QButtonGroup(self)
+        self.language_button_group.setExclusive(True)
+        self.language_buttons: dict[str, QPushButton] = {}
+        for index, (code, native_name) in enumerate(LANGUAGE_OPTIONS):
+            button = QPushButton(native_name)
+            button.setObjectName("LanguageChoice")
+            button.setCheckable(True)
+            button.setMinimumHeight(56)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setChecked(code == self.main_window.language)
+            button.toggled.connect(
+                lambda checked, language=code: self._select_language(language)
+                if checked
+                else None
+            )
+            self.language_button_group.addButton(button)
+            self.language_buttons[code] = button
+            row, column = divmod(index, 2)
+            if index == len(LANGUAGE_OPTIONS) - 1:
+                choices.addWidget(button, row, 0, 1, 2)
+            else:
+                choices.addWidget(button, row, column)
+        layout.addLayout(choices)
+
+        self.language_hint = QLabel(tr("选择语言后，界面会立即切换。"))
+        self.language_hint.setObjectName("Muted")
+        self.language_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.language_hint)
+        layout.addStretch()
+        return page
+
+    def _select_language(self, language: str) -> None:
+        index = self.main_window.language_combo.findData(language)
+        if index >= 0:
+            self.main_window.language_combo.setCurrentIndex(index)
 
     def _quality_page(self) -> QWidget:
         tr = self.main_window.tr
@@ -795,23 +881,51 @@ class OnboardingDialog(QDialog):
         return page
 
     def _update_next_enabled(self) -> None:
-        self.next_button.setEnabled(self.pages.currentIndex() != 0 or self.quality_confirm.isChecked())
+        self.next_button.setEnabled(
+            self.pages.currentIndex() != 1 or self.quality_confirm.isChecked()
+        )
 
     def _page_changed(self, index: int) -> None:
         self.step_label.setText(
             self.main_window.trf(
                 "第 {current} 步，共 {total} 步",
                 current=index + 1,
-                total=3,
+                total=ONBOARDING_PAGE_COUNT,
             )
         )
         self.back_button.setVisible(index > 0)
         self.next_button.setText(
-            self.main_window.tr("开始使用" if index == 2 else "下一步")
+            self.main_window.tr(
+                "开始使用"
+                if index == ONBOARDING_PAGE_COUNT - 1
+                else "下一步"
+            )
         )
-        if index == 2:
+        if index == ONBOARDING_PAGE_COUNT - 1:
             self._refresh_summary()
         self._update_next_enabled()
+
+    def retranslate_ui(self) -> None:
+        tr = self.main_window.tr
+        self.setWindowTitle(tr("首次使用引导"))
+        self.language_title.setText(tr("选择你的语言"))
+        self.language_subtitle.setText(
+            tr("选择最适合你的显示语言。之后可以随时在主面板中更改。")
+        )
+        self.language_hint.setText(tr("选择语言后，界面会立即切换。"))
+        target_names = (
+            "原生刷新率 · 画面最流畅，性能要求最高",
+            "刷新率的 1/2 · 推荐从这里开始",
+            "刷新率的 1/3 · 适合约 30 FPS 的高画质目标",
+            "刷新率的 1/4 · 优先画质与重型场景",
+        )
+        for index, source in enumerate(target_names):
+            self.guide_target_combo.setItemText(index, tr(source))
+        for code, button in self.language_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(code == self.main_window.language)
+            button.blockSignals(False)
+        self._page_changed(self.pages.currentIndex())
 
     def _refresh_summary(self) -> None:
         upload_text = self.main_window.tr(
@@ -829,9 +943,9 @@ class OnboardingDialog(QDialog):
 
     def next_page(self) -> None:
         index = self.pages.currentIndex()
-        if index == 0 and not self.quality_confirm.isChecked():
+        if index == 1 and not self.quality_confirm.isChecked():
             return
-        if index < 2:
+        if index < ONBOARDING_PAGE_COUNT - 1:
             self.pages.setCurrentIndex(index + 1)
             return
         divisor = int(self.guide_target_combo.currentData())
@@ -2377,7 +2491,11 @@ class MainWindow(QMainWindow):
         if not force:
             value = self.settings.value("onboarding/completed", False)
             completed = value if isinstance(value, bool) else str(value).strip().lower() in {"1", "true", "yes", "on"}
-            if completed:
+            try:
+                revision = int(self.settings.value("onboarding/revision", 0))
+            except (TypeError, ValueError):
+                revision = 0
+            if completed and revision >= ONBOARDING_REVISION:
                 return
         self.onboarding_dialog = OnboardingDialog(self)
         self.onboarding_dialog.finished.connect(lambda _result: setattr(self, "onboarding_dialog", None))
@@ -2492,6 +2610,8 @@ class MainWindow(QMainWindow):
         if hasattr(self, "show_action"):
             self.show_action.setText(self.tr("显示面板"))
             self.exit_action.setText(self.tr("退出"))
+        if self.onboarding_dialog is not None:
+            self.onboarding_dialog.retranslate_ui()
         self.chart.language = self.language
         self.chart.update()
         if self.last_snapshot:

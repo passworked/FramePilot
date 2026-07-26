@@ -1,4 +1,7 @@
 {
+  "选择你的语言": "Choisissez votre langue",
+  "选择最适合你的显示语言。之后可以随时在主面板中更改。": "Choisissez la langue d’affichage qui vous convient. Vous pourrez la modifier à tout moment dans le panneau principal.",
+  "选择语言后，界面会立即切换。": "L’interface change immédiatement lorsque vous sélectionnez une langue.",
   "实时帧预算控制台 · 默认只读": "Console de budget de trames en temps réel · Lecture seule par défaut",
   "等待场景应用": "En attente de l’application de la scène",
   "正在连接": "Connexion en cours",

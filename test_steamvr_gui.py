@@ -4,6 +4,8 @@ import unittest
 
 from steamvr_adaptive_gui import (
     AUTO_UPLOAD_MIN_INTERVAL_SECONDS,
+    ONBOARDING_PAGE_BUILDERS,
+    ONBOARDING_PAGE_COUNT,
     SHOW_AB_EXPERIMENT_UI,
     STEAMVR_LAUNCH_URI,
     auto_upload_due,
@@ -116,6 +118,10 @@ class SteamVRAutostartTests(unittest.TestCase):
 class ProductionUiTests(unittest.TestCase):
     def test_ab_experiment_controls_are_hidden(self) -> None:
         self.assertFalse(SHOW_AB_EXPERIMENT_UI)
+
+    def test_onboarding_includes_language_as_its_own_first_step(self) -> None:
+        self.assertEqual(ONBOARDING_PAGE_COUNT, 4)
+        self.assertEqual(ONBOARDING_PAGE_BUILDERS[0], "_language_page")
 
 
 if __name__ == "__main__":
