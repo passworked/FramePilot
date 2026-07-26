@@ -11,5 +11,6 @@ screenshots/
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
+server/world-worker/.wrangler/
 *.log
 FramePilotVR-*-windows-x64.zip

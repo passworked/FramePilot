@@ -71,6 +71,27 @@ def archive_bytes(records: list[dict[str, object]]) -> bytes:
     return output.getvalue()
 
 
+def public_world_payload(world_id: str = WORLD_ID) -> dict[str, object]:
+    return {
+        "id": world_id,
+        "name": "Test World",
+        "authorId": "usr_22222222-2222-2222-2222-222222222222",
+        "authorName": "Test Author",
+        "imageUrl": "https://api.vrchat.cloud/api/1/image/file_example/1/1024",
+        "thumbnailImageUrl": (
+            "https://api.vrchat.cloud/api/1/image/file_example/1/256"
+        ),
+        "visits": 1234,
+        "favorites": 56,
+        "capacity": 32,
+        "recommendedCapacity": 16,
+        "releaseStatus": "public",
+        "publicationDate": "2025-01-01T00:00:00.000Z",
+        "updated_at": "2026-07-26T00:00:00.000Z",
+        "version": 7,
+    }
+
+
 class IngestTests(unittest.TestCase):
     def setUp(self) -> None:
         self.temporary = tempfile.TemporaryDirectory()
@@ -197,6 +218,75 @@ class IngestTests(unittest.TestCase):
             ingest_service.source_rate_key("", source_ip, secret),
             ingest_service.hash_source_ip(source_ip, secret),
         )
+
+    def test_public_world_cache_is_persistent_and_reports_freshness(self) -> None:
+        path, digest = self.write_archive([valid_record()])
+        _manifest, records = ingest_service.validate_archive(path)
+        ingest_service.store_batch(
+            path, digest, path.stat().st_size, records, "203.0.113.10", "s" * 64
+        )
+
+        with patch.object(ingest_service.time, "time", return_value=1_000.0):
+            stored = ingest_service.store_cached_world(
+                WORLD_ID,
+                public_world_payload(),
+            )
+        self.assertEqual(stored["fetched_at"], 1_000)
+        self.assertFalse(stored["stale"])
+
+        with patch.object(ingest_service.time, "time", return_value=1_001.0):
+            cached = ingest_service.cached_world(WORLD_ID)
+        self.assertIsNotNone(cached)
+        assert cached is not None
+        self.assertTrue(cached["known"])
+        self.assertFalse(cached["stale"])
+        self.assertEqual(cached["world"], public_world_payload())
+
+        with patch.object(
+            ingest_service.time,
+            "time",
+            return_value=1_001.0 + ingest_service.WORLD_CACHE_TTL_SECONDS,
+        ):
+            stale = ingest_service.cached_world(WORLD_ID)
+        self.assertIsNotNone(stale)
+        assert stale is not None
+        self.assertTrue(stale["stale"])
+
+    def test_world_without_telemetry_cannot_fill_vps_cache(self) -> None:
+        self.assertEqual(
+            ingest_service.cached_world(WORLD_ID),
+            {"known": False},
+        )
+        with self.assertRaisesRegex(
+            ingest_service.ValidationError,
+            "no FramePilot telemetry",
+        ):
+            ingest_service.store_cached_world(WORLD_ID, public_world_payload())
+
+    def test_world_cache_rejects_private_or_untrusted_fields(self) -> None:
+        private = public_world_payload()
+        private["releaseStatus"] = "private"
+        with self.assertRaisesRegex(
+            ingest_service.ValidationError,
+            "Only public worlds",
+        ):
+            ingest_service.validated_world_cache_payload(private, WORLD_ID)
+
+        unsafe_image = public_world_payload()
+        unsafe_image["imageUrl"] = "https://example.com/tracker.png"
+        with self.assertRaisesRegex(
+            ingest_service.ValidationError,
+            "VRChat API host",
+        ):
+            ingest_service.validated_world_cache_payload(unsafe_image, WORLD_ID)
+
+        extra = public_world_payload()
+        extra["assetUrl"] = "https://example.invalid/world.vrcw"
+        with self.assertRaisesRegex(
+            ingest_service.ValidationError,
+            "Unsupported world cache field",
+        ):
+            ingest_service.validated_world_cache_payload(extra, WORLD_ID)
 
 
 if __name__ == "__main__":

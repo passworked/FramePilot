@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "framepilot-vr"
-version = "0.10.0"
+version = "0.11.0"
 description = "Frame-budget-driven adaptive resolution controller and SteamVR OSD."
 readme = "README.md"
 requires-python = ">=3.11"

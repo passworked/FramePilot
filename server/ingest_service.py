@@ -15,6 +15,7 @@ import tempfile
 import threading
 import time
 from typing import BinaryIO
+from urllib.parse import urlsplit
 import zipfile
 
 
@@ -24,6 +25,12 @@ MAX_UNCOMPRESSED_BYTES = int(
     os.environ.get("FRAMEPILOT_MAX_UNCOMPRESSED_BYTES", 50 * 1024 * 1024)
 )
 MAX_RECORDS = int(os.environ.get("FRAMEPILOT_MAX_RECORDS", 20_000))
+MAX_WORLD_CACHE_BYTES = int(
+    os.environ.get("FRAMEPILOT_MAX_WORLD_CACHE_BYTES", 64 * 1024)
+)
+WORLD_CACHE_TTL_SECONDS = int(
+    os.environ.get("FRAMEPILOT_WORLD_CACHE_TTL_SECONDS", 6 * 60 * 60)
+)
 DATA_ROOT = Path(os.environ.get("FRAMEPILOT_DATA_ROOT", "/srv/framepilot"))
 DB_PATH = DATA_ROOT / "db" / "framepilot.sqlite3"
 OBJECT_ROOT = DATA_ROOT / "objects" / "sha256"
@@ -34,6 +41,14 @@ ORIGIN_SECRET_FILE = Path(
 LISTEN_HOST = os.environ.get("FRAMEPILOT_LISTEN_HOST", "127.0.0.1")
 LISTEN_PORT = int(os.environ.get("FRAMEPILOT_LISTEN_PORT", "8080"))
 WORLD_PATTERN = re.compile(r"^wrld_[0-9a-fA-F-]{16,}$")
+PUBLIC_WORLD_PATTERN = re.compile(
+    r"^wrld_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12}$"
+)
+USER_PATTERN = re.compile(
+    r"^usr_[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-"
+    r"[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 HEX_ID_PATTERN = re.compile(r"^[0-9a-f]{32,64}$")
 BLOCKED_KEYS = {
     "hardware_id",
@@ -47,6 +62,24 @@ BLOCKED_KEYS = {
     "username",
 }
 BATCH_STORE_LOCK = threading.Lock()
+WORLD_CACHE_STORE_LOCK = threading.Lock()
+WORLD_CACHE_FIELDS = {
+    "id",
+    "name",
+    "authorId",
+    "authorName",
+    "imageUrl",
+    "thumbnailImageUrl",
+    "visits",
+    "favorites",
+    "capacity",
+    "recommendedCapacity",
+    "releaseStatus",
+    "publicationDate",
+    "labsPublicationDate",
+    "updated_at",
+    "version",
+}
 
 
 class ValidationError(ValueError):
@@ -119,6 +152,16 @@ def initialize_storage() -> None:
                 uploaded_bytes INTEGER NOT NULL,
                 PRIMARY KEY(source_ip_hash, hour_bucket)
             );
+
+            CREATE TABLE IF NOT EXISTS world_cache (
+                world_id TEXT PRIMARY KEY,
+                payload_json TEXT NOT NULL,
+                fetched_at INTEGER NOT NULL,
+                expires_at INTEGER NOT NULL
+            );
+
+            CREATE INDEX IF NOT EXISTS world_cache_expires
+                ON world_cache(expires_at);
             """
         )
         connection.commit()
@@ -132,6 +175,175 @@ def origin_secret() -> str:
     if len(value) < 32:
         raise RuntimeError("Origin secret must contain at least 32 characters")
     return value
+
+
+def valid_public_world_id(value: str) -> bool:
+    return PUBLIC_WORLD_PATTERN.fullmatch(value) is not None
+
+
+def _validated_text(
+    payload: dict[str, object],
+    field: str,
+    *,
+    maximum: int,
+    required: bool = False,
+) -> str | None:
+    value = payload.get(field)
+    if value is None and not required:
+        return None
+    if not isinstance(value, str) or (required and not value):
+        raise ValidationError(f"world.{field} must be a string")
+    if len(value) > maximum:
+        raise ValidationError(f"world.{field} is too long")
+    return value
+
+
+def validated_world_cache_payload(
+    payload: object,
+    expected_world_id: str,
+) -> dict[str, object]:
+    if not isinstance(payload, dict):
+        raise ValidationError("World cache payload must be an object")
+    unknown_fields = set(payload) - WORLD_CACHE_FIELDS
+    if unknown_fields:
+        raise ValidationError(
+            f"Unsupported world cache field: {sorted(unknown_fields)[0]}"
+        )
+    world_id = _validated_text(payload, "id", maximum=41, required=True)
+    if world_id != expected_world_id or not valid_public_world_id(world_id):
+        raise ValidationError("world.id does not match the request")
+    release_status = _validated_text(
+        payload,
+        "releaseStatus",
+        maximum=16,
+        required=True,
+    )
+    if release_status != "public":
+        raise ValidationError("Only public worlds may be cached")
+
+    normalized: dict[str, object] = {
+        "id": world_id,
+        "name": _validated_text(payload, "name", maximum=256, required=True),
+        "authorName": _validated_text(
+            payload,
+            "authorName",
+            maximum=256,
+            required=True,
+        ),
+        "releaseStatus": release_status,
+    }
+    author_id = _validated_text(payload, "authorId", maximum=41)
+    if author_id is not None:
+        if not USER_PATTERN.fullmatch(author_id):
+            raise ValidationError("world.authorId is invalid")
+        normalized["authorId"] = author_id
+
+    for field in ("imageUrl", "thumbnailImageUrl"):
+        value = _validated_text(payload, field, maximum=2048)
+        if value is None:
+            continue
+        parsed = urlsplit(value)
+        if (
+            parsed.scheme != "https"
+            or parsed.hostname != "api.vrchat.cloud"
+            or not parsed.path.startswith("/api/1/")
+        ):
+            raise ValidationError(f"world.{field} must use the VRChat API host")
+        normalized[field] = value
+
+    for field, maximum in (
+        ("visits", 10_000_000_000),
+        ("favorites", 10_000_000_000),
+        ("capacity", 1_000),
+        ("recommendedCapacity", 1_000),
+        ("version", 1_000_000),
+    ):
+        value = payload.get(field)
+        if value is None:
+            continue
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise ValidationError(f"world.{field} must be an integer")
+        if value < 0 or value > maximum:
+            raise ValidationError(f"world.{field} is out of range")
+        normalized[field] = value
+
+    for field in ("publicationDate", "labsPublicationDate", "updated_at"):
+        value = _validated_text(payload, field, maximum=64)
+        if value is not None:
+            normalized[field] = value
+    return normalized
+
+
+def cached_world(world_id: str) -> dict[str, object] | None:
+    if not valid_public_world_id(world_id):
+        raise ValidationError("Invalid world_id")
+    now = int(time.time())
+    with closing(database()) as connection:
+        row = connection.execute(
+            """
+            SELECT payload_json, fetched_at, expires_at
+            FROM world_cache
+            WHERE world_id=?
+            """,
+            (world_id,),
+        ).fetchone()
+        known = (
+            connection.execute(
+                "SELECT 1 FROM records WHERE world_id=? LIMIT 1",
+                (world_id,),
+            ).fetchone()
+            is not None
+        )
+    if row is None:
+        return {"known": known}
+    return {
+        "known": known,
+        "world": json.loads(str(row["payload_json"])),
+        "fetched_at": int(row["fetched_at"]),
+        "expires_at": int(row["expires_at"]),
+        "stale": int(row["expires_at"]) <= now,
+    }
+
+
+def store_cached_world(world_id: str, payload: object) -> dict[str, object]:
+    normalized = validated_world_cache_payload(payload, world_id)
+    fetched_at = int(time.time())
+    expires_at = fetched_at + max(60, WORLD_CACHE_TTL_SECONDS)
+    encoded = json.dumps(
+        normalized,
+        ensure_ascii=False,
+        separators=(",", ":"),
+        sort_keys=True,
+    )
+    with WORLD_CACHE_STORE_LOCK:
+        with closing(database()) as connection:
+            known = (
+                connection.execute(
+                    "SELECT 1 FROM records WHERE world_id=? LIMIT 1",
+                    (world_id,),
+                ).fetchone()
+                is not None
+            )
+            if not known:
+                raise ValidationError("World has no FramePilot telemetry")
+            connection.execute(
+                """
+                INSERT INTO world_cache(world_id, payload_json, fetched_at, expires_at)
+                VALUES (?, ?, ?, ?)
+                ON CONFLICT(world_id) DO UPDATE SET
+                    payload_json=excluded.payload_json,
+                    fetched_at=excluded.fetched_at,
+                    expires_at=excluded.expires_at
+                """,
+                (world_id, encoded, fetched_at, expires_at),
+            )
+            connection.commit()
+    return {
+        "world": normalized,
+        "fetched_at": fetched_at,
+        "expires_at": expires_at,
+        "stale": False,
+    }
 
 
 def recursive_blocked_key(value: object) -> str | None:
@@ -500,8 +712,48 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(body)
 
+    def origin_authorized(self) -> bool:
+        secret = origin_secret()
+        supplied_secret = self.headers.get("X-FramePilot-Origin-Secret", "")
+        return hmac.compare_digest(supplied_secret, secret)
+
     def do_GET(self) -> None:  # noqa: N802
-        if self.path != "/healthz":
+        parsed = urlsplit(self.path)
+        if parsed.path.startswith("/v1/cache/worlds/"):
+            if not self.origin_authorized():
+                self.send_json(
+                    HTTPStatus.FORBIDDEN,
+                    {"ok": False, "error": "origin_auth_failed"},
+                )
+                return
+            world_id = parsed.path.removeprefix("/v1/cache/worlds/")
+            try:
+                result = cached_world(world_id)
+                if result is None or not result.get("known"):
+                    self.send_json(
+                        HTTPStatus.NOT_FOUND,
+                        {"ok": False, "error": "world_not_observed"},
+                    )
+                    return
+                if "world" not in result:
+                    self.send_json(
+                        HTTPStatus.NOT_FOUND,
+                        {"ok": False, "error": "cache_miss", "known": True},
+                    )
+                    return
+                self.send_json(HTTPStatus.OK, {"ok": True, **result})
+            except ValidationError as exc:
+                self.send_json(
+                    HTTPStatus.BAD_REQUEST,
+                    {"ok": False, "error": "invalid_world_id", "detail": str(exc)},
+                )
+            except Exception:
+                self.send_json(
+                    HTTPStatus.SERVICE_UNAVAILABLE,
+                    {"ok": False, "error": "storage_unavailable"},
+                )
+            return
+        if parsed.path != "/healthz":
             self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
             return
         try:
@@ -512,6 +764,9 @@ class Handler(BaseHTTPRequestHandler):
                 records = int(
                     connection.execute("SELECT COUNT(*) FROM records").fetchone()[0]
                 )
+                cached_worlds = int(
+                    connection.execute("SELECT COUNT(*) FROM world_cache").fetchone()[0]
+                )
             self.send_json(
                 HTTPStatus.OK,
                 {
@@ -520,6 +775,7 @@ class Handler(BaseHTTPRequestHandler):
                     "schema_version": SCHEMA_VERSION,
                     "batches": batches,
                     "records": records,
+                    "cached_worlds": cached_worlds,
                 },
             )
         except Exception:
@@ -598,6 +854,45 @@ class Handler(BaseHTTPRequestHandler):
         finally:
             if temporary_path is not None:
                 temporary_path.unlink(missing_ok=True)
+
+    def do_PUT(self) -> None:  # noqa: N802
+        parsed = urlsplit(self.path)
+        if not parsed.path.startswith("/v1/cache/worlds/"):
+            self.send_json(HTTPStatus.NOT_FOUND, {"ok": False, "error": "not_found"})
+            return
+        try:
+            if not self.origin_authorized():
+                self.send_json(
+                    HTTPStatus.FORBIDDEN,
+                    {"ok": False, "error": "origin_auth_failed"},
+                )
+                return
+            world_id = parsed.path.removeprefix("/v1/cache/worlds/")
+            if not valid_public_world_id(world_id):
+                raise ValidationError("Invalid world_id")
+            content_type = self.headers.get("Content-Type", "").split(";", 1)[0].strip()
+            if content_type != "application/json":
+                raise ValidationError("Content-Type must be application/json")
+            content_length = int(self.headers.get("Content-Length", "0"))
+            if content_length <= 0 or content_length > MAX_WORLD_CACHE_BYTES:
+                self.send_json(
+                    HTTPStatus.REQUEST_ENTITY_TOO_LARGE,
+                    {"ok": False, "error": "invalid_world_cache_size"},
+                )
+                return
+            payload = json.loads(self.rfile.read(content_length))
+            stored = store_cached_world(world_id, payload)
+            self.send_json(HTTPStatus.OK, {"ok": True, **stored})
+        except (ValidationError, ValueError, json.JSONDecodeError) as exc:
+            self.send_json(
+                HTTPStatus.BAD_REQUEST,
+                {"ok": False, "error": "invalid_world", "detail": str(exc)},
+            )
+        except Exception:
+            self.send_json(
+                HTTPStatus.INTERNAL_SERVER_ERROR,
+                {"ok": False, "error": "internal_error"},
+            )
 
 
 def main() -> None:
