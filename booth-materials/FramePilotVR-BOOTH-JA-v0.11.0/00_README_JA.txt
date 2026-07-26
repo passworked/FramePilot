@@ -7,7 +7,7 @@ FramePilot VR — BOOTH日本語プロモーション素材パック
 フォルダー構成
 --------------
 01_images/
-  BOOTH商品画像（1200 × 1200 PNG）6枚
+  BOOTH商品画像（1200 × 1200 PNG）7枚
   素材一覧プレビュー
 
 02_video/
@@ -28,12 +28,14 @@ FramePilot VR — BOOTH日本語プロモーション素材パック
 
 掲載順のおすすめ
 ------------------
-1. 00_cover_square_1200.png
+1. 00_booth_product_cover_1200.png
 2. 01_osd_square_1200.png
 3. 02_auto_resolution_square_1200.png
 4. 04_full_frame_goal_square_1200.png
 5. 03_world_bench_square_1200.png
 6. 05_multilanguage_square_1200.png
+
+旧デザインの 00_cover_square_1200.png も比較用に残しています。
 
 表現上の注意
 ------------

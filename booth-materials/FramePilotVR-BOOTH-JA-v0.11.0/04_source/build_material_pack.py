@@ -269,6 +269,51 @@ def save_square_cover(icon: Image.Image, app_ja: Image.Image) -> Path:
     return out
 
 
+def save_booth_product_cover(
+    icon: Image.Image,
+    app_ja: Image.Image,
+    cover_background: Image.Image,
+) -> Path:
+    canvas = fit_cover(cover_background.convert("RGB"), (1200, 1200), 0.45).convert("RGBA")
+    canvas.alpha_composite(Image.new("RGBA", canvas.size, (1, 5, 13, 74)))
+    draw = ImageDraw.Draw(canvas)
+
+    # Top brand plate remains legible at BOOTH thumbnail size.
+    draw.rounded_rectangle((50, 42, 1150, 147), radius=28, fill=(4, 9, 17, 214), outline="#29445C", width=2)
+    icon_small = fit_contain(icon.convert("RGBA"), (68, 68))
+    canvas.alpha_composite(icon_small, (72, 60))
+    draw.text((160, 61), "FramePilot VR", font=font(38, weight=650), fill=INK)
+    draw.text((160, 107), "STEAMVR DYNAMIC RESOLUTION CONTROLLER", font=font(14, weight=600), fill=CYAN)
+    pill(draw, (944, 67), "無料配布", size=21, fill="#0B2B22", outline="#2E9B78", color=MINT)
+
+    draw.text((62, 190), "VRのフレームを、", font=font(66, weight=650), fill=INK)
+    draw.text((62, 274), "もっと賢く。", font=font(88, weight=700), fill=MINT)
+    draw.text(
+        (68, 388),
+        "負荷を見える化し、画質を自動調整。\n目標フレームレートの維持をサポート。",
+        font=font(27),
+        fill="#E1E9F2",
+        spacing=10,
+    )
+
+    # Actual Japanese application capture; no generated or reconstructed UI.
+    rounded_paste(canvas, app_ja, (64, 520, 1136, 1018), radius=30, border="#3B5B76", border_width=3, shadow=30)
+    pill(draw, (82, 973), "自動解像度", size=19, fill="#10281F", outline="#348168", color=MINT)
+    pill(draw, (274, 973), "VR内OSD", size=19, fill="#101F32", outline="#356895", color=CYAN)
+    pill(draw, (435, 973), "日本語対応", size=19, fill="#211A37", outline="#6B56AA", color=VIOLET)
+    pill(draw, (624, 973), "7言語", size=19, fill="#2A2014", outline="#846236", color=ORANGE)
+
+    draw.rounded_rectangle((64, 1051, 1136, 1122), radius=20, fill=(4, 9, 17, 210), outline="#29445C", width=2)
+    draw.text((88, 1070), "OSD  ·  AUTO RESOLUTION  ·  WORLD BENCH", font=font(19, weight=600), fill="#C7D6E5")
+    draw.text((986, 1070), "v0.11.0", font=font(19, weight=600), fill=MUTED)
+    draw.text((66, 1150), "Windows / SteamVR", font=font(18), fill=MUTED)
+    draw.text((1078, 1148), "FP", font=font(20, weight=650), fill=MINT)
+
+    out = IMAGES / "00_booth_product_cover_1200.png"
+    canvas.convert("RGB").save(out, quality=95)
+    return out
+
+
 def save_square_osd(icon: Image.Image, osd: Image.Image, vr_bg: Image.Image) -> Path:
     canvas = fit_cover(vr_bg.convert("RGB"), (1200, 1200), 0.48).convert("RGBA")
     veil = Image.new("RGBA", canvas.size, (2, 7, 15, 138))
@@ -594,7 +639,8 @@ def build_video(slides: list[Path], output: Path) -> None:
 
 def create_contact_sheet(paths: list[Path], output: Path) -> None:
     thumb_size = (420, 420)
-    canvas = gradient((1320, 910)).convert("RGBA")
+    rows = math.ceil(len(paths) / 3)
+    canvas = gradient((1320, 96 + rows * 430 + 24)).convert("RGBA")
     draw = ImageDraw.Draw(canvas)
     draw.text((34, 25), "FramePilot VR  ·  BOOTH 日本語素材一覧", font=font(38), fill=INK)
     for index, path in enumerate(paths):
@@ -627,6 +673,11 @@ def main() -> int:
         required=True,
         help="ImageGen VR background plate",
     )
+    parser.add_argument(
+        "--cover-background",
+        type=Path,
+        help="Optional ImageGen square product-cover background plate",
+    )
     parser.add_argument("--skip-video", action="store_true")
     args = parser.parse_args()
 
@@ -640,6 +691,14 @@ def main() -> int:
     website = Image.open(ROOT / "screenshots" / "world-bench-live.png").convert("RGB")
     website_ja = localize_world_bench_japanese(website)
     vr_bg = Image.open(args.vr_background).convert("RGB")
+    stored_cover_background = CAPTURES / "imagegen-product-cover-background.png"
+    if args.cover_background is not None:
+        cover_bg = Image.open(args.cover_background).convert("RGB")
+        shutil.copy2(args.cover_background, stored_cover_background)
+    elif stored_cover_background.exists():
+        cover_bg = Image.open(stored_cover_background).convert("RGB")
+    else:
+        cover_bg = vr_bg
     osd = render_osd_japanese(CAPTURES / "osd-ja-actual-render.png")
 
     app_ja.save(CAPTURES / "app-ja-safe-crop.png")
@@ -650,6 +709,7 @@ def main() -> int:
     shutil.copy2(args.vr_background, CAPTURES / "imagegen-vr-background.png")
 
     squares = [
+        save_booth_product_cover(icon, app_ja, cover_bg),
         save_square_cover(icon, app_ja),
         save_square_osd(icon, osd, vr_bg),
         save_square_auto(icon, app_ja),

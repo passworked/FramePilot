@@ -1,0 +1,18 @@
+Use case: ads-marketing
+Asset type: square BOOTH digital software product cover background
+Primary request: a premium abstract PCVR performance-control backdrop for FramePilot VR,
+designed to receive a real software screenshot and Japanese typography added later
+Scene/backdrop: deep black and midnight navy virtual space with a subtle curved cyan
+frame-budget arc, restrained violet glow, faint perspective grid, and tiny telemetry-like
+light particles that contain no readable symbols
+Style/medium: polished cinematic 3D render, minimalist premium software advertising,
+crisp and trustworthy
+Composition/framing: square 1:1; generous dark negative space across the upper-left and
+center-left for Japanese headline; subtle luminous detail on the upper-right; darker
+lower half suitable for a real UI screenshot card
+Lighting/mood: calm, high-tech, performance-focused
+Color palette: black, midnight navy, cyan, mint, restrained violet
+Constraints: background only; no UI, no fake screenshot, no headset, no person, no
+numbers, no text, no logo, no watermark, no copyrighted characters or game assets
+Avoid: busy cyberpunk city, excessive neon, red warning colors, game imagery,
+illegible pseudo-text
