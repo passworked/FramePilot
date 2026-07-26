@@ -9,7 +9,7 @@ from steamvr_adaptive_gui import (
     SHOW_AB_EXPERIMENT_UI,
     STEAMVR_LAUNCH_URI,
     auto_upload_due,
-    clear_persisted_write_unlock,
+    cached_write_permission,
     request_steamvr_start,
 )
 
@@ -62,21 +62,27 @@ class AutoUploadSchedulingTests(unittest.TestCase):
 
 
 class _FakeSettings:
-    def __init__(self) -> None:
-        self.values = {"runtime/armed": True}
+    def __init__(self, values: dict[str, object] | None = None) -> None:
+        self.values = values or {}
 
-    def remove(self, key: str) -> None:
-        self.values.pop(key, None)
+    def value(self, key: str, default: object = None) -> object:
+        return self.values.get(key, default)
 
 
-class WriteSafetyTests(unittest.TestCase):
-    def test_saved_write_unlock_is_cleared_at_startup(self) -> None:
+class WritePermissionCacheTests(unittest.TestCase):
+    def test_saved_write_permission_is_restored_at_startup(self) -> None:
+        settings = _FakeSettings({"runtime/armed": True})
+
+        armed = cached_write_permission(settings)  # type: ignore[arg-type]
+
+        self.assertTrue(armed)
+
+    def test_missing_write_permission_defaults_to_locked(self) -> None:
         settings = _FakeSettings()
 
-        armed = clear_persisted_write_unlock(settings)  # type: ignore[arg-type]
+        armed = cached_write_permission(settings)  # type: ignore[arg-type]
 
         self.assertFalse(armed)
-        self.assertNotIn("runtime/armed", settings.values)
 
 
 class SteamVRAutostartTests(unittest.TestCase):
@@ -122,6 +128,7 @@ class ProductionUiTests(unittest.TestCase):
     def test_onboarding_includes_language_as_its_own_first_step(self) -> None:
         self.assertEqual(ONBOARDING_PAGE_COUNT, 4)
         self.assertEqual(ONBOARDING_PAGE_BUILDERS[0], "_language_page")
+        self.assertEqual(ONBOARDING_PAGE_BUILDERS[-1], "_welcome_page")
 
 
 if __name__ == "__main__":

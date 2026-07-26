@@ -150,7 +150,7 @@ def feature_number(draw: ImageDraw.ImageDraw, number: str, label: str, x: int = 
     draw.text((x + 62, y + 1), label, font=font(22), fill=MUTED)
 
 
-def footer(draw: ImageDraw.ImageDraw, text: str = "Windows / SteamVR  ·  v0.11.0") -> None:
+def footer(draw: ImageDraw.ImageDraw, text: str = "Windows / SteamVR  ·  v0.12.0") -> None:
     draw.line((66, 1134, 1134, 1134), fill="#213247", width=2)
     draw.text((66, 1150), text, font=font(18), fill=MUTED)
     draw.text((1074, 1148), "FP", font=font(20), fill=MINT)
@@ -305,7 +305,7 @@ def save_booth_product_cover(
 
     draw.rounded_rectangle((64, 1051, 1136, 1122), radius=20, fill=(4, 9, 17, 210), outline="#29445C", width=2)
     draw.text((88, 1070), "OSD  ·  AUTO RESOLUTION  ·  WORLD BENCH", font=font(19, weight=600), fill="#C7D6E5")
-    draw.text((986, 1070), "v0.11.0", font=font(19, weight=600), fill=MUTED)
+    draw.text((986, 1070), "v0.12.0", font=font(19, weight=600), fill=MUTED)
     draw.text((66, 1150), "Windows / SteamVR", font=font(18), fill=MUTED)
     draw.text((1078, 1148), "FP", font=font(20, weight=650), fill=MINT)
 
@@ -432,7 +432,7 @@ def save_square_languages(
         fill=INK,
         spacing=4,
     )
-    footer(draw, "7 languages  ·  Windows / SteamVR  ·  v0.11.0")
+    footer(draw, "7 languages  ·  Windows / SteamVR  ·  v0.12.0")
     out = IMAGES / "05_multilanguage_square_1200.png"
     canvas.convert("RGB").save(out, quality=95)
     return out
@@ -471,7 +471,7 @@ def save_wide_scene(
     if note:
         draw.text((84, 943), note, font=font(18), fill=MUTED)
     draw.line((80, 1018, 1840, 1018), fill="#24384C", width=2)
-    draw.text((80, 1034), "Windows / SteamVR  ·  v0.11.0", font=font(18), fill=MUTED)
+    draw.text((80, 1034), "Windows / SteamVR  ·  v0.12.0", font=font(18), fill=MUTED)
     out = VIDEO_SLIDES / filename
     canvas.convert("RGB").save(out, quality=95)
     return out
@@ -685,9 +685,9 @@ def main() -> int:
         directory.mkdir(parents=True, exist_ok=True)
 
     icon = Image.open(ROOT / "assets" / "framepilot-vr-icon.png").convert("RGBA")
-    app_ja = safe_app_capture(ROOT / "screenshots" / "framepilot-v0.11.0-ja-marketing.png")
-    app_en = safe_app_capture(ROOT / "screenshots" / "framepilot-v0.11.0-en-marketing.png")
-    app_de = safe_app_capture(ROOT / "screenshots" / "framepilot-v0.11.0-de-marketing.png")
+    app_ja = safe_app_capture(ROOT / "screenshots" / "framepilot-v0.12.0-ja-marketing.png")
+    app_en = safe_app_capture(ROOT / "screenshots" / "framepilot-v0.12.0-en-marketing.png")
+    app_de = safe_app_capture(ROOT / "screenshots" / "framepilot-v0.12.0-de-marketing.png")
     website = Image.open(ROOT / "screenshots" / "world-bench-live.png").convert("RGB")
     website_ja = localize_world_bench_japanese(website)
     vr_bg = Image.open(args.vr_background).convert("RGB")

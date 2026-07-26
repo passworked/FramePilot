@@ -59,10 +59,10 @@ from steamvr_core import (
 )
 
 
-APP_VERSION = "0.11.0"
+APP_VERSION = "0.12.0"
 STEAMVR_LAUNCH_URI = "steam://rungameid/250820"
 TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
-ONBOARDING_REVISION = 4
+ONBOARDING_REVISION = 5
 ONBOARDING_PAGE_BUILDERS = (
     "_language_page",
     "_quality_page",
@@ -159,10 +159,9 @@ def auto_upload_due(
     return False, interval_due_at
 
 
-def clear_persisted_write_unlock(settings: QSettings) -> bool:
-    """Write permission is intentionally session-only."""
-    settings.remove("runtime/armed")
-    return False
+def cached_write_permission(settings: QSettings) -> bool:
+    """Restore the user's explicit SteamVR resolution-control choice."""
+    return setting_bool(settings, "runtime/armed", False)
 
 
 def compare_ab_results(results: list[dict[str, object]]) -> dict[str, object] | None:
@@ -211,7 +210,7 @@ ZH_EN = {
     "只读监控": "Read-only monitor",
     "单步自动调整": "One-step adjustment",
     "连续自适应": "Continuous adaptive",
-    "允许修改 SteamVR 分辨率（本次运行）": "Allow SteamVR resolution changes (this session)",
+    "允许 FramePilot VR 调控 SteamVR 分辨率": "Allow FramePilot VR to control SteamVR resolution",
     "启动 FramePilot VR 时自动启动 SteamVR": "Start SteamVR automatically with FramePilot VR",
     "退出时恢复启动值": "Restore startup value on exit",
     "分辨率调节范围与规则": "Resolution adjustment range and rules",
@@ -285,17 +284,20 @@ ZH_EN = {
     "刷新率的 1/4 · 优先画质与重型场景": "1/4 refresh · Prioritizes quality and demanding scenes",
     "不确定时选择 1/2；之后可以随时在主面板中修改。": "Choose 1/2 if unsure; you can change it later in the main panel.",
     "欢迎使用 FramePilot VR": "Welcome to FramePilot VR",
-    "设置已经准备完成。面板会先保持只读监控，让你观察帧时间、GPU 压力和推荐分辨率。": "Setup is ready. The panel starts in read-only monitoring so you can inspect frame times, GPU pressure, and the recommended resolution.",
+    "设置即将完成。是否允许 FramePilot VR 调控 SteamVR 分辨率，请由你手动选择。": "Setup is almost complete. Choose whether FramePilot VR may control SteamVR resolution.",
     "自动上传匿名采集数据（推荐）": "Automatically upload anonymous collection data (recommended)",
     "勾选后，现有及以后生成的尚未上传聚合记录会自动增量上传；可随时取消。包含世界 ID、人数范围、硬件型号、渲染设置和聚合性能指标；不包含玩家身份、实例 ID、机器名或硬件指纹。": "When enabled, existing and future pending aggregate records are uploaded incrementally; you can disable this at any time. Data includes world ID, population range, hardware model, render settings, and aggregate performance metrics; it excludes player identity, instance ID, machine name, and hardware fingerprint.",
-    "确认数据正常后，再从主面板允许本次运行修改 SteamVR 分辨率。": "After confirming the data looks correct, allow SteamVR resolution changes for this session from the main panel.",
+    "允许 FramePilot VR 调控 SteamVR 分辨率（保存此选择）": "Allow FramePilot VR to control SteamVR resolution (save this choice)",
+    "勾选后，单步、连续和手动操作可以修改当前游戏的 SteamVR resolutionScale。此选择会保存在本机，直到你主动取消。": "When enabled, one-step, continuous, and manual actions may change the current game's SteamVR resolutionScale. This choice is saved on this PC until you disable it.",
     "第 {current} 步，共 {total} 步": "Step {current} of {total}",
     "自动增量上传": "Automatic incremental upload",
     "仅保存在本机": "Keep on this PC only",
     "串流画质：已确认最高档": "Streaming quality: highest preset confirmed",
     "目标帧率：{target}": "Target frame rate: {target}",
     "匿名采集数据：{mode}": "Anonymous collection data: {mode}",
-    "初始状态：只读监控": "Initial state: read-only monitoring",
+    "SteamVR 分辨率控制：{mode}": "SteamVR resolution control: {mode}",
+    "已允许并保存": "Allowed and saved",
+    "保持锁定": "Locked",
     "自动上传已启用": "Automatic upload enabled",
     "仅本地采集": "Local collection only",
     "首次使用引导完成": "First-use guide completed",
@@ -337,11 +339,11 @@ ZH_EN = {
     "应用分辨率": "Apply resolution",
     "校准失败": "Calibration failed",
     "需要先进入 VR 游戏并取得稳定帧时序。": "Enter a VR game and wait for stable frame timings first.",
-    "精确阶梯校准需要先允许本次运行修改 SteamVR 分辨率。": "Allow SteamVR resolution changes for this session before precise stepped calibration.",
+    "精确阶梯校准需要先允许 FramePilot VR 调控 SteamVR 分辨率。": "Allow FramePilot VR to control SteamVR resolution before precise stepped calibration.",
     "校准会短暂测试当前值、-10% 和 +10%，结束后自动恢复原值。请保持在同一代表性场景。": "Calibration briefly tests the current value, -10%, and +10%, then restores the original value. Keep the same representative scene.",
     "正在校准；请保持游戏场景与视角尽量稳定": "Calibrating; keep the game scene and view as stable as possible",
-    "允许后，本次运行中的单步、连续和手动模式都可以修改当前游戏的 SteamVR resolutionScale。\n\n下次启动会重新锁定。建议先使用只读模式观察，再进行单步验证。": "For this run, one-step, continuous, and manual modes may change the current game's SteamVR resolutionScale.\n\nThis permission is cleared when FramePilot starts again. Observe in read-only mode first, then validate one step.",
-    "请先勾选“允许修改 SteamVR 分辨率（本次运行）”。": "Enable “Allow SteamVR resolution changes (this session)” first.",
+    "允许后，单步、连续和手动模式都可以修改当前游戏的 SteamVR resolutionScale。\n\n此选择会保存在本机，直到你主动取消。建议先使用只读模式观察，再进行单步验证。": "When allowed, one-step, continuous, and manual modes may change the current game's SteamVR resolutionScale.\n\nThis choice is saved on this PC until you disable it. Observe in read-only mode first, then validate one step.",
+    "请先勾选“允许 FramePilot VR 调控 SteamVR 分辨率”。": "Enable “Allow FramePilot VR to control SteamVR resolution” first.",
     "只读监控 · 不会修改 SteamVR": "READ-ONLY · SteamVR will not be modified",
     "连续控制已启用 · 分辨率可能持续变化": "LIVE CONTROL ENABLED · Resolution may change continuously",
     "已允许写入 · 单步和手动操作可能修改分辨率": "WRITES ALLOWED · One-step and manual actions may change resolution",
@@ -413,7 +415,7 @@ ZH_EN = {
     "已请求 Steam 启动 SteamVR": "Requested Steam to start SteamVR",
     "无法自动启动 SteamVR": "Unable to start SteamVR automatically",
     "保存此选项；从下次启动 FramePilot VR 起生效。": "Save this option; it takes effect the next time FramePilot VR starts.",
-    "未勾选时只监控和推荐，不会写入 SteamVR。勾选后，单步、连续和手动操作可修改当前游戏的 resolutionScale；下次启动会重新锁定。": "When cleared, the app only monitors and recommends without writing to SteamVR. When selected, one-step, continuous, and manual actions may change the current game's resolutionScale; writes are locked again next launch.",
+    "未勾选时只监控和推荐，不会写入 SteamVR。勾选后，单步、连续和手动操作可修改当前游戏的 resolutionScale；此选择会保存到本机。": "When cleared, the app only monitors and recommends without writing to SteamVR. When selected, one-step, continuous, and manual actions may change the current game's resolutionScale; this choice is saved on this PC.",
     "导入失败": "Import failed",
     "共享数据正在上传": "Sharing data is already uploading",
     "VR 参数叠加层已启动；SteamVR 未运行时会自动等待": "VR metrics overlay started; it will wait automatically when SteamVR is not running",
@@ -847,7 +849,7 @@ class OnboardingDialog(QDialog):
         layout.setSpacing(14)
         layout.addWidget(self._title(tr("欢迎使用 FramePilot VR")))
         text = QLabel(
-            tr("设置已经准备完成。面板会先保持只读监控，让你观察帧时间、GPU 压力和推荐分辨率。")
+            tr("设置即将完成。是否允许 FramePilot VR 调控 SteamVR 分辨率，请由你手动选择。")
         )
         text.setWordWrap(True)
         layout.addWidget(text)
@@ -873,10 +875,21 @@ class OnboardingDialog(QDialog):
         upload_hint.setObjectName("Muted")
         upload_hint.setWordWrap(True)
         layout.addWidget(upload_hint)
-        safety = QLabel(tr("确认数据正常后，再从主面板允许本次运行修改 SteamVR 分辨率。"))
-        safety.setObjectName("Muted")
-        safety.setWordWrap(True)
-        layout.addWidget(safety)
+        self.guide_allow_resolution = QCheckBox(
+            tr("允许 FramePilot VR 调控 SteamVR 分辨率（保存此选择）")
+        )
+        self.guide_allow_resolution.setChecked(self.main_window.arm_check.isChecked())
+        self.guide_allow_resolution.toggled.connect(self._refresh_summary)
+        layout.addWidget(self.guide_allow_resolution)
+        resolution_hint = QLabel(
+            tr(
+                "勾选后，单步、连续和手动操作可以修改当前游戏的 SteamVR resolutionScale。"
+                "此选择会保存在本机，直到你主动取消。"
+            )
+        )
+        resolution_hint.setObjectName("Muted")
+        resolution_hint.setWordWrap(True)
+        layout.addWidget(resolution_hint)
         layout.addStretch()
         return page
 
@@ -931,11 +944,14 @@ class OnboardingDialog(QDialog):
         upload_text = self.main_window.tr(
             "自动增量上传" if self.guide_auto_upload.isChecked() else "仅保存在本机"
         )
+        resolution_text = self.main_window.tr(
+            "已允许并保存" if self.guide_allow_resolution.isChecked() else "保持锁定"
+        )
         self.guide_summary.setText(
             f"✓ {self.main_window.tr('串流画质：已确认最高档')}<br><br>"
             f"✓ {self.main_window.trf('目标帧率：{target}', target=self.guide_target_combo.currentText())}<br><br>"
             f"✓ {self.main_window.trf('匿名采集数据：{mode}', mode=upload_text)}<br><br>"
-            f"✓ {self.main_window.tr('初始状态：只读监控')}"
+            f"✓ {self.main_window.trf('SteamVR 分辨率控制：{mode}', mode=resolution_text)}"
         )
 
     def previous_page(self) -> None:
@@ -958,9 +974,8 @@ class OnboardingDialog(QDialog):
         )
         self.main_window.mode_combo.blockSignals(False)
         self.main_window.arm_check.blockSignals(True)
-        self.main_window.arm_check.setChecked(False)
+        self.main_window.arm_check.setChecked(self.guide_allow_resolution.isChecked())
         self.main_window.arm_check.blockSignals(False)
-        clear_persisted_write_unlock(self.main_window.settings)
         self.main_window.set_auto_upload_enabled(self.guide_auto_upload.isChecked())
         self.main_window.settings.setValue("onboarding/completed", True)
         self.main_window.settings.setValue("onboarding/revision", ONBOARDING_REVISION)
@@ -1315,7 +1330,7 @@ class MonitorWorker(QObject):
             raise RuntimeError("尚未取得 VR 游戏帧时序，暂时不能校准")
         precise = bool(options.get("precise", False))
         if precise and not self.runtime.config.armed:
-            raise PermissionError("精确校准需要先允许本次运行修改 SteamVR 分辨率")
+            raise PermissionError("精确校准需要先允许 FramePilot VR 调控 SteamVR 分辨率")
         original = int(self.runtime.current_scale)
         stages = [original]
         if precise:
@@ -1727,11 +1742,11 @@ class MainWindow(QMainWindow):
             self.steamvr_autostart_changed
         )
         mode_layout.addWidget(self.steamvr_autostart_check)
-        self.arm_check = QCheckBox("允许修改 SteamVR 分辨率（本次运行）")
+        self.arm_check = QCheckBox("允许 FramePilot VR 调控 SteamVR 分辨率")
         self.arm_check.setToolTip(
             self.tr(
                 "未勾选时只监控和推荐，不会写入 SteamVR。"
-                "勾选后，单步、连续和手动操作可修改当前游戏的 resolutionScale；下次启动会重新锁定。"
+                "勾选后，单步、连续和手动操作可修改当前游戏的 resolutionScale；此选择会保存到本机。"
             )
         )
         self.arm_check.stateChanged.connect(self.arm_changed)
@@ -2603,7 +2618,7 @@ class MainWindow(QMainWindow):
         self.arm_check.setToolTip(
             self.tr(
                 "未勾选时只监控和推荐，不会写入 SteamVR。"
-                "勾选后，单步、连续和手动操作可修改当前游戏的 resolutionScale；下次启动会重新锁定。"
+                "勾选后，单步、连续和手动操作可修改当前游戏的 resolutionScale；此选择会保存到本机。"
             )
         )
         self._refresh_target_labels()
@@ -2626,7 +2641,7 @@ class MainWindow(QMainWindow):
 
     def _restore_cached_config(self) -> None:
         self.arm_check.blockSignals(True)
-        self.arm_check.setChecked(clear_persisted_write_unlock(self.settings))
+        self.arm_check.setChecked(cached_write_permission(self.settings))
         self.arm_check.blockSignals(False)
         if not self.settings.contains("runtime/mode"):
             self.settings.sync()
@@ -2708,10 +2723,10 @@ class MainWindow(QMainWindow):
             "up_observation_seconds": config.up_observation_seconds,
             "up_rollback_cooldown_seconds": config.up_rollback_cooldown_seconds,
             "up_gpu_limit_pct": config.up_gpu_limit_pct,
+            "armed": config.armed,
         }
         for key, value in values.items():
             self.settings.setValue(f"runtime/{key}", value)
-        self.settings.remove("runtime/armed")
         self.settings.sync()
 
     def config_from_ui(self) -> RuntimeConfig:
@@ -2867,7 +2882,7 @@ class MainWindow(QMainWindow):
                 QMessageBox.information(
                     self,
                     self.tr("写入锁定"),
-                    self.tr("精确阶梯校准需要先允许本次运行修改 SteamVR 分辨率。"),
+                    self.tr("精确阶梯校准需要先允许 FramePilot VR 调控 SteamVR 分辨率。"),
                 )
                 return
             answer = QMessageBox.warning(
@@ -2940,8 +2955,8 @@ class MainWindow(QMainWindow):
                 self,
                 self.tr("允许修改分辨率"),
                 self.tr(
-                    "允许后，本次运行中的单步、连续和手动模式都可以修改当前游戏的 SteamVR resolutionScale。\n\n"
-                    "下次启动会重新锁定。建议先使用只读模式观察，再进行单步验证。"
+                    "允许后，单步、连续和手动模式都可以修改当前游戏的 SteamVR resolutionScale。\n\n"
+                    "此选择会保存在本机，直到你主动取消。建议先使用只读模式观察，再进行单步验证。"
                 ),
                 QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
@@ -2988,7 +3003,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 "写入锁定",
-                "A/B 测试会主动修改分辨率，请先允许本次运行修改 SteamVR 分辨率。",
+                "A/B 测试会主动修改分辨率，请先允许 FramePilot VR 调控 SteamVR 分辨率。",
             )
             return
         start_scale = 100 if variant == "A" else 150
@@ -3046,7 +3061,7 @@ class MainWindow(QMainWindow):
             QMessageBox.information(
                 self,
                 self.tr("写入锁定"),
-                self.tr("请先勾选“允许修改 SteamVR 分辨率（本次运行）”。"),
+                self.tr("请先勾选“允许 FramePilot VR 调控 SteamVR 分辨率”。"),
             )
             return
         current = self.last_snapshot.get("resolution_scale", "—")
