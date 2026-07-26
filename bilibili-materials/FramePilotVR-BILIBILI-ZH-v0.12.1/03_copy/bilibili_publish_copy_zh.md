@@ -28,6 +28,9 @@ FramePilot VR 是一款面向 Windows / SteamVR 的动态分辨率控制面板�
 
 完整使用说明与下载地址：请在发布时替换为实际链接。
 
+BGM：[Chill lofi inspired](https://opengameart.org/content/chill-lofi-inspired)
+— omfgdude（[CC0](https://creativecommons.org/publicdomain/zero/1.0/)）
+
 ## 标签建议
 
 `VR` `SteamVR` `VRChat` `PCVR` `帧率优化` `显卡` `性能测试` `动态分辨率`

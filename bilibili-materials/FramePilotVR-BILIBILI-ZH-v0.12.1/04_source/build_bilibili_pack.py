@@ -3,12 +3,9 @@ from __future__ import annotations
 import hashlib
 import math
 import os
-import shutil
-import struct
 import subprocess
 import sys
 import tempfile
-import wave
 from pathlib import Path
 
 from PIL import Image, ImageDraw, ImageFilter, ImageFont
@@ -36,6 +33,15 @@ RED = "#FF7C91"
 PANEL = "#0C131E"
 BORDER = "#29445C"
 NAVY = "#050911"
+
+SUBTITLES = (
+    "VR 掉帧，别急着降画质\n先看每一帧的时间预算",
+    "GPU、CPU、帧预算\n在 VR 里直接看",
+    "重场景逐步降分辨率\n有余量再谨慎升高",
+    "默认只读，授权后才写入\n退出时恢复初始值",
+    "不只看平均值\n用 P95 帧时间捕捉真实卡顿",
+    "FramePilot VR，让每一帧更有把握\n说明见简介",
+)
 
 
 def font(size: int, bold: bool = False) -> ImageFont.FreeTypeFont:
@@ -434,48 +440,37 @@ def save_scene_6(background: Image.Image, icon: Image.Image, app_capture: Image.
     return out
 
 
-def make_audio(path: Path, duration: float = 30.0, sample_rate: int = 48_000) -> None:
-    total = round(duration * sample_rate)
-    chords = [
-        (55.00, 82.41, 110.00),
-        (49.00, 73.42, 98.00),
-        (65.41, 98.00, 130.81),
-        (43.65, 65.41, 87.31),
-        (55.00, 82.41, 123.47),
-        (55.00, 82.41, 110.00),
-    ]
-    with wave.open(str(path), "wb") as wav:
-        wav.setnchannels(2)
-        wav.setsampwidth(2)
-        wav.setframerate(sample_rate)
-        chunk = bytearray()
-        for index in range(total):
-            t = index / sample_rate
-            section = min(5, int(t // 5))
-            local = t - section * 5
-            chord = chords[section]
-            pad_env = min(1.0, local / 0.8, (5.0 - local) / 0.65)
-            pad = sum(math.sin(2 * math.pi * frequency * t + section * 0.23) for frequency in chord) / 3
-            shimmer = math.sin(2 * math.pi * chord[1] * 4 * t) * 0.08
-            beat_phase = t % 1.25
-            kick = math.sin(2 * math.pi * (54 - 24 * min(beat_phase / 0.22, 1)) * beat_phase)
-            kick *= math.exp(-beat_phase * 17)
-            transition_phase = local
-            hit = math.sin(2 * math.pi * 180 * transition_phase) * math.exp(-transition_phase * 12)
-            value = (0.17 * pad * pad_env) + (0.035 * shimmer * pad_env) + (0.14 * kick) + (0.07 * hit)
-            master = min(1.0, t / 0.8, (duration - t) / 1.0)
-            sample = max(-1.0, min(1.0, value * master))
-            left = round(sample * 32767)
-            right = round(sample * 0.94 * 32767)
-            chunk.extend(struct.pack("<hh", left, right))
-            if len(chunk) >= 65_536:
-                wav.writeframes(chunk)
-                chunk.clear()
-        if chunk:
-            wav.writeframes(chunk)
+def burn_subtitles(slides: list[Path]) -> None:
+    for slide, text in zip(slides, SUBTITLES, strict=True):
+        image = Image.open(slide).convert("RGB")
+        draw = ImageDraw.Draw(image)
+        subtitle_font = font(42, bold=True)
+        bbox = draw.multiline_textbbox(
+            (0, 0),
+            text,
+            font=subtitle_font,
+            align="center",
+            spacing=8,
+            stroke_width=6,
+        )
+        text_width = bbox[2] - bbox[0]
+        text_height = bbox[3] - bbox[1]
+        x = (image.width - text_width) // 2
+        y = 965 - text_height
+        draw.multiline_text(
+            (x, y),
+            text,
+            font=subtitle_font,
+            fill="#FFFFFF",
+            stroke_width=6,
+            stroke_fill="#000000",
+            align="center",
+            spacing=8,
+        )
+        image.save(slide, quality=95)
 
 
-def build_video(slides: list[Path], audio: Path, output: Path) -> None:
+def build_video(slides: list[Path], bgm: Path, tts_clips: list[Path], output: Path) -> None:
     try:
         import imageio_ffmpeg
     except ImportError as exc:
@@ -484,7 +479,9 @@ def build_video(slides: list[Path], audio: Path, output: Path) -> None:
     command: list[str] = [ffmpeg, "-y", "-hide_banner", "-loglevel", "warning"]
     for slide in slides:
         command.extend(["-loop", "1", "-framerate", "30", "-t", "5", "-i", str(slide)])
-    command.extend(["-i", str(audio)])
+    command.extend(["-stream_loop", "-1", "-i", str(bgm)])
+    for clip in tts_clips:
+        command.extend(["-i", str(clip)])
     filters: list[str] = []
     labels: list[str] = []
     for index in range(len(slides)):
@@ -499,6 +496,32 @@ def build_video(slides: list[Path], audio: Path, output: Path) -> None:
         )
         labels.append(f"[{label}]")
     filters.append(f"{''.join(labels)}concat=n={len(slides)}:v=1:a=0[outv]")
+    filters.append(
+        f"[{len(slides)}:a]atrim=start=0:duration=30,asetpts=PTS-STARTPTS,"
+        "volume=0.18,afade=t=in:st=0:d=0.8,afade=t=out:st=28.5:d=1.5[bg]"
+    )
+    voice_labels: list[str] = []
+    for index in range(len(tts_clips)):
+        input_index = len(slides) + 1 + index
+        delay_ms = index * 5000 + 150
+        label = f"voice{index}"
+        filters.append(
+            f"[{input_index}:a]aresample=48000,adelay={delay_ms}:all=1[{label}]"
+        )
+        voice_labels.append(f"[{label}]")
+    filters.append(
+        f"{''.join(voice_labels)}amix=inputs={len(voice_labels)}:"
+        "duration=longest:normalize=0,apad,atrim=duration=30,"
+        "asplit=2[voice_sc][voice_mix]"
+    )
+    filters.append(
+        "[bg][voice_sc]sidechaincompress=threshold=0.015:ratio=8:"
+        "attack=20:release=350[ducked]"
+    )
+    filters.append(
+        "[ducked][voice_mix]amix=inputs=2:duration=first:normalize=0,"
+        "loudnorm=I=-16:TP=-1.5:LRA=8[outa]"
+    )
     command.extend(
         [
             "-filter_complex",
@@ -506,7 +529,7 @@ def build_video(slides: list[Path], audio: Path, output: Path) -> None:
             "-map",
             "[outv]",
             "-map",
-            f"{len(slides)}:a",
+            "[outa]",
             "-c:v",
             "libx264",
             "-preset",
@@ -584,10 +607,19 @@ def main() -> int:
         save_scene_5(background, icon),
         save_scene_6(background, icon, app_capture),
     ]
-    audio = CAPTURES / "original-electronic-bed.wav"
-    make_audio(audio)
-    build_video(slides, audio, VIDEO / "FramePilotVR_Bilibili_ZH_30s_1080p.mp4")
-    audio.unlink(missing_ok=True)
+    burn_subtitles(slides)
+    bgm = SOURCE / "audio" / "ChillLofiR_0.mp3"
+    tts_clips = [SOURCE / "audio" / "tts" / f"{index:02d}.mp3" for index in range(1, 7)]
+    missing_audio = [path for path in [bgm, *tts_clips] if not path.exists()]
+    if missing_audio:
+        missing = "\n".join(str(path) for path in missing_audio)
+        raise FileNotFoundError(f"Missing BGM or TTS source files:\n{missing}")
+    build_video(
+        slides,
+        bgm,
+        tts_clips,
+        VIDEO / "FramePilotVR_Bilibili_ZH_30s_1080p.mp4",
+    )
     make_preview(slides, covers, IMAGES / "preview_contact_sheet.jpg")
     write_manifest()
     print(f"Built {len(covers)} covers, {len(slides)} scenes, and a 30-second video in {PACK}")

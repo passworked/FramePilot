@@ -16,6 +16,7 @@ FramePilot VR · B站中文视频素材包 · v0.12.1
 02_video/
   FramePilotVR_Bilibili_ZH_30s_1080p.mp4
     1920×1080、30 fps、H.264 + AAC，时长 30 秒。
+    内含普通话 TTS、CC0 lo-fi BGM，以及白字黑描边的内嵌字幕。
 
   FramePilotVR_Bilibili_ZH_30s_subtitles.srt
     可上传到 B 站的无障碍字幕。
@@ -31,11 +32,19 @@ FramePilot VR · B站中文视频素材包 · v0.12.1
   build_bilibili_pack.py
     可重复构建素材的 Python 脚本。
 
+  generate_tts.py
+    使用普通话神经语音重新生成六段 TTS。
+
+  audio/
+    CC0 lo-fi 原曲、许可记录和成片使用的 TTS 分段。
+
 说明
 ====
 
 - 视频中的应用界面和 VR OSD 均由 FramePilot VR v0.12.1 实际代码渲染。
 - 氛围背景由 OpenAI 内置图像生成工具创建；界面、品牌和中文文案均在本地合成。
-- 背景音乐为构建脚本程序化生成的原创电子氛围音，不含第三方音乐素材。
-- 视频已经烧录核心文案；SRT 用于平台字幕与无障碍支持。
+- 背景音乐为 omfgdude 创作的 `Chill lofi inspired`，按 CC0 许可使用；
+  来源与许可记录位于 `04_source/audio/LICENSE.md`。
+- 普通话 TTS 使用 Microsoft `zh-CN-XiaoxiaoNeural` 生成。
+- 视频已经烧录白字黑描边字幕；SRT 继续用于平台字幕与无障碍支持。
 - 本次仅新增营销素材，不改变应用能力，因此项目版本保持 v0.12.1。
