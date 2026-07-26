@@ -60,3 +60,16 @@ release archives, runtime logs, local settings, credentials, tokens, secrets,
 or unrelated user changes. If GitHub authentication or the remote is
 unavailable, preserve the completed local work and report the publishing
 blocker instead of discarding or rewriting it.
+
+## External material exclusion
+
+Do not commit or push non-software external-platform data or promotional
+materials, including Booth and Bilibili assets, exports, metadata, drafts, or
+publishing payloads. Before every commit and push, inspect the staged paths and
+exclude this material even when it exists inside the repository workspace.
+Only software source, software documentation, tests, packaging configuration,
+and other files directly required to build, operate, or maintain FramePilot VR
+belong in GitHub.
+
+Content of this kind that was already pushed before this rule was added may
+remain unless the user explicitly requests its removal.
