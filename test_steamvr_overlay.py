@@ -82,6 +82,31 @@ class ApplicationFramerateTests(unittest.TestCase):
         self.assertEqual(label, "SCHEDULER")
         self.assertEqual(value, "FROZEN  81% > 81%")
 
+    def test_osd_distinguishes_recovery_wait_from_generic_hold(self) -> None:
+        data = {
+            "resolution_scale": 71,
+            "proposed_scale": 71,
+            "decision": "hold",
+            "reason": "性能余量观察中 7/12 秒",
+            "observation_phase": "pre_up_stable",
+        }
+
+        _label, value, _color = overlay_rows(data, ["decision"])[0]
+
+        self.assertEqual(value, "WAIT  71% > 71%")
+
+    def test_osd_labels_follow_selected_language(self) -> None:
+        data = {
+            "refresh_hz": 72.0,
+            "application_fps": 72.0,
+            "target_fps": 72.0,
+            "budget_ms": 1000.0 / 72.0,
+        }
+
+        label, _value, _color = overlay_rows(data, ["fps"], language="ja")[0]
+
+        self.assertEqual(label, "アプリ FPS")
+
 
 if __name__ == "__main__":
     unittest.main()

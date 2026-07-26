@@ -654,7 +654,11 @@ class AdaptiveController:
 
         gpu_over = stats.gpu_p95_ms >= budget_ms * config.gpu_down_ratio
         cpu_over = stats.cpu_p95_ms >= budget_ms * 0.92
-        delivery_bad = stats.dropped > 0 or stats.mispresented > 0 or stats.reprojection_pct >= 3.0
+        # OpenVR runtimes do not report m_nNumMisPresented consistently. Some
+        # Oculus/Quest paths report it continuously even with ample frame-time
+        # headroom, no dropped frames, and no reprojection. Keep the metric for
+        # diagnostics, but do not use an absolute non-zero value as pressure.
+        delivery_bad = stats.dropped > 0 or stats.reprojection_pct >= 3.0
 
         if gpu_over or (delivery_bad and stats.gpu_p95_ms >= budget_ms * 0.80):
             self.stable_since = None
@@ -672,7 +676,6 @@ class AdaptiveController:
             and stats.cpu_p95_ms <= budget_ms * config.cpu_raise_ratio
             and stats.reprojection_pct == 0.0
             and stats.dropped == 0
-            and stats.mispresented == 0
         )
         if stable:
             if self.stable_since is None:
@@ -682,7 +685,11 @@ class AdaptiveController:
                 self.stable_since = now
                 target_gpu_ms = budget_ms * config.gpu_raise_ratio
                 predicted = math.floor(scale * target_gpu_ms / max(stats.gpu_p95_ms, 0.1))
-                target = min(config.max_scale, max(config.min_scale, predicted))
+                target = min(
+                    config.max_scale,
+                    scale + config.step_up,
+                    max(config.min_scale, predicted),
+                )
                 gpu_soft_limited = system_gpu_pct is not None and system_gpu_pct >= config.up_gpu_limit_pct
                 if gpu_soft_limited:
                     max_step = (
@@ -706,7 +713,23 @@ class AdaptiveController:
             return Decision("hold", scale, f"性能余量观察中 {stable_for:.0f}/{config.raise_stable_seconds:.0f} 秒")
 
         self.stable_since = None
-        return Decision("hold", scale, "处于滞回区间")
+        if stats.gpu_p95_ms > budget_ms * config.gpu_raise_ratio:
+            return Decision(
+                "hold",
+                scale,
+                f"GPU 余量不足以回升（{stats.gpu_p95_ms:.1f}/{budget_ms * config.gpu_raise_ratio:.1f} ms）",
+            )
+        if stats.cpu_p95_ms > budget_ms * config.cpu_raise_ratio:
+            return Decision(
+                "hold",
+                scale,
+                f"CPU 波动超过回升线（{stats.cpu_p95_ms:.1f}/{budget_ms * config.cpu_raise_ratio:.1f} ms）",
+            )
+        if stats.reprojection_pct > 0.0:
+            return Decision("hold", scale, f"检测到重投影 {stats.reprojection_pct:.1f}%，暂缓回升")
+        if stats.dropped > 0:
+            return Decision("hold", scale, f"检测到 {stats.dropped} 个掉帧事件，暂缓回升")
+        return Decision("hold", scale, "等待形成连续稳定余量")
 
 
 class GpuUtilizationSampler:
@@ -1262,7 +1285,6 @@ class AdaptiveRuntime:
             and stats.cpu_p95_ms <= budget_ms * self.config.cpu_raise_ratio
             and stats.reprojection_pct == 0.0
             and stats.dropped == 0
-            and stats.mispresented == 0
         )
         if not live_stable:
             return None
@@ -1272,7 +1294,12 @@ class AdaptiveRuntime:
             * TARGET_CHANGE_PROBE_RATIO
             / max(stats.gpu_p95_ms, 0.1)
         )
-        target = min(self.config.max_scale, safe_scale, predicted)
+        target = min(
+            self.config.max_scale,
+            self.current_scale + self.config.step_up,
+            safe_scale,
+            predicted,
+        )
         unsafe_scale = int(profile.get("unsafe_scale", 0))
         if unsafe_scale > 0:
             target = min(target, unsafe_scale - 1)
@@ -1293,7 +1320,20 @@ class AdaptiveRuntime:
         decision: Decision,
         profile: dict[str, object] | None,
     ) -> Decision:
-        if decision.action != "up" or profile is None:
+        if decision.action != "up":
+            return decision
+        step_target = min(
+            decision.proposed_scale,
+            self.config.max_scale,
+            self.current_scale + self.config.step_up,
+        )
+        if step_target != decision.proposed_scale:
+            decision = Decision(
+                "up",
+                step_target,
+                f"{decision.reason}；单次升档限制为 {self.config.step_up}%",
+            )
+        if profile is None:
             return decision
         unsafe_scale = int(profile.get("unsafe_scale", 0))
         if unsafe_scale <= 0 or decision.proposed_scale < unsafe_scale:
@@ -1393,7 +1433,6 @@ class AdaptiveRuntime:
             and stats.gpu_p95_ms < budget_ms * self.config.gpu_down_ratio
             and stats.reprojection_pct < 3.0
             and stats.dropped == 0
-            and stats.mispresented == 0
         )
         if not cadence_matches:
             pending["matched_since"] = None
@@ -1411,7 +1450,12 @@ class AdaptiveRuntime:
             * TARGET_CHANGE_PROBE_RATIO
             / max(stats.gpu_p95_ms, 0.1)
         )
-        target = min(self.config.max_scale, TARGET_CHANGE_PROBE_MAX_SCALE, predicted)
+        target = min(
+            self.config.max_scale,
+            TARGET_CHANGE_PROBE_MAX_SCALE,
+            self.current_scale + self.config.step_up,
+            predicted,
+        )
         gpu_soft_limited = system_gpu_pct is not None and system_gpu_pct >= self.config.up_gpu_limit_pct
         if gpu_soft_limited:
             max_step = GPU_SATURATED_SOFT_CAP_STEP if system_gpu_pct >= 98.0 else GPU_SOFT_CAP_STEP
@@ -1441,7 +1485,6 @@ class AdaptiveRuntime:
             stats.gpu_p95_ms >= budget_ms * self.config.gpu_down_ratio
             or stats.reprojection_pct >= 3.0
             or stats.dropped > 0
-            or stats.mispresented > 0
         )
         if not pressure:
             return None
@@ -1832,7 +1875,7 @@ def run_self_test() -> int:
     stable = WindowStats(180, 4.0, 6.0, 7.0, 11.0, 0.0, 0, 0)
     assert controller.decide(stable, 11.111, 100, 2.0, config).action == "hold"
     predicted_up = controller.decide(stable, 11.111, 100, 7.0, config)
-    assert predicted_up.action == "up" and predicted_up.proposed_scale == 133
+    assert predicted_up.action == "up" and predicted_up.proposed_scale == 105
 
     budget_30fps = 1000.0 / 30.0
     mild_over = WindowStats(180, 25.0, 31.0, 8.0, 33.0, 0.0, 0, 0)
@@ -1845,7 +1888,7 @@ def run_self_test() -> int:
         1.0,
         replace(config, raise_stable_seconds=0.0),
     )
-    assert predicted_30fps.action == "up" and 119 <= predicted_30fps.proposed_scale <= 120
+    assert predicted_30fps.action == "up" and predicted_30fps.proposed_scale == 105
     assert action_cooldown_seconds("down", config) == 0.25
     assert action_cooldown_seconds("up", config) == config.cooldown_seconds
     assert action_cooldown_seconds("rollback", config) == 0.0
@@ -1875,7 +1918,7 @@ def run_self_test() -> int:
     capped = RuntimeConfig(min_scale=40, max_scale=100, raise_stable_seconds=0)
     assert controller.decide(stable, 11.111, 100, 8.0, capped).proposed_scale == 100
     below_min_stable = AdaptiveController().decide(stable, 11.111, 20, 8.0, capped)
-    assert below_min_stable.proposed_scale == 40
+    assert below_min_stable.proposed_scale == 25
     saturated = AdaptiveController().decide(
         stable,
         11.111,
@@ -1912,12 +1955,12 @@ def run_self_test() -> int:
     target_probe = target_change_runtime._target_change_raise_decision(
         cadence, 45.0, 1000.0 / 45.0, 80.0, requested + 1.0
     )
-    assert target_probe is not None and target_probe.action == "up" and target_probe.proposed_scale == 150
+    assert target_probe is not None and target_probe.action == "up" and target_probe.proposed_scale == 105
     target_change_runtime.pending_target_raise["matched_since"] = requested + 0.1
     target_probe_saturated = target_change_runtime._target_change_raise_decision(
         cadence, 45.0, 1000.0 / 45.0, 95.0, requested + 1.0
     )
-    assert target_probe_saturated is not None and target_probe_saturated.proposed_scale == 110
+    assert target_probe_saturated is not None and target_probe_saturated.proposed_scale == 105
 
     assert effective_frame_budget(72.0, target_divisor=1) == (72.0, 1000.0 / 72.0)
     assert effective_frame_budget(72.0, target_divisor=2) == (36.0, 1000.0 / 36.0)
@@ -2050,12 +2093,12 @@ def run_self_test() -> int:
             80.0,
             10.0,
         )
-        assert profile_decision is not None and profile_decision.proposed_scale == 120
+        assert profile_decision is not None and profile_decision.proposed_scale == 105
         capped_profile_decision = profile_runtime._cap_up_with_vrc_profile(
             Decision("up", 160, "test"),
             reloaded_profile,
         )
-        assert capped_profile_decision.proposed_scale == 139
+        assert capped_profile_decision.proposed_scale == 105
 
         collector = PassiveVrcDataCollector(
             temporary_root / "shared",

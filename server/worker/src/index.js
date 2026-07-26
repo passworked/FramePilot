@@ -11,11 +11,31 @@ function json(status, payload) {
   });
 }
 
-async function sha256Hex(buffer) {
-  const digest = await crypto.subtle.digest("SHA-256", buffer);
-  return [...new Uint8Array(digest)]
+function bytesToHex(buffer) {
+  return [...new Uint8Array(buffer)]
     .map((value) => value.toString(16).padStart(2, "0"))
     .join("");
+}
+
+async function sha256Hex(buffer) {
+  return bytesToHex(await crypto.subtle.digest("SHA-256", buffer));
+}
+
+async function clientRateKey(secret, clientIP) {
+  const key = await crypto.subtle.importKey(
+    "raw",
+    new TextEncoder().encode(secret),
+    { name: "HMAC", hash: "SHA-256" },
+    false,
+    ["sign"],
+  );
+  return bytesToHex(
+    await crypto.subtle.sign(
+      "HMAC",
+      key,
+      new TextEncoder().encode(clientIP),
+    ),
+  );
 }
 
 export default {
@@ -57,7 +77,16 @@ export default {
     if (body.byteLength === 0 || body.byteLength > MAX_UPLOAD_BYTES) {
       return json(413, { ok: false, error: "upload_too_large" });
     }
+    const originSecret = env.ORIGIN_AUTH_SECRET || env.ORIGIN_SECRET;
+    if (!originSecret) {
+      return json(503, { ok: false, error: "origin_secret_unavailable" });
+    }
+    const clientIP = (request.headers.get("cf-connecting-ip") || "").trim();
+    if (!clientIP) {
+      return json(400, { ok: false, error: "missing_client_address" });
+    }
     const actualSha256 = await sha256Hex(body);
+    const rateKey = await clientRateKey(originSecret, clientIP);
     const suppliedSha256 = (
       request.headers.get("x-batch-sha256") || ""
     ).toLowerCase();
@@ -72,7 +101,8 @@ export default {
           "content-type": "application/zip",
           "content-length": String(body.byteLength),
           "x-batch-sha256": actualSha256,
-          "x-framepilot-origin-secret": env.ORIGIN_SECRET,
+          "x-framepilot-origin-secret": originSecret,
+          "x-framepilot-client-key": rateKey,
           "cf-connecting-ip":
             request.headers.get("cf-connecting-ip") || "unknown",
           "user-agent": "framepilot-cloudflare-worker/1",
@@ -81,13 +111,18 @@ export default {
         redirect: "manual",
       },
     );
+    const responseHeaders = {
+      "content-type": "application/json",
+      "cache-control": "no-store",
+      "x-content-type-options": "nosniff",
+    };
+    const retryAfter = originResponse.headers.get("retry-after");
+    if (retryAfter) {
+      responseHeaders["retry-after"] = retryAfter;
+    }
     return new Response(originResponse.body, {
       status: originResponse.status,
-      headers: {
-        "content-type": "application/json",
-        "cache-control": "no-store",
-        "x-content-type-options": "nosniff",
-      },
+      headers: responseHeaders,
     });
   },
 };

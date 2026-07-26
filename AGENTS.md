@@ -35,6 +35,20 @@ Before delivery, search for stale copies of the previous version, verify that
 all active version strings agree, and name newly built artifacts with the
 updated version.
 
+## Desktop shortcut maintenance
+
+Whenever an agent builds, updates, or delivers a runnable local release, it
+must ensure that the existing `FramePilot VR.lnk` desktop shortcut launches
+the newest delivered version. Prefer a stable, unversioned launcher or install
+path when practical; if the shortcut targets a versioned release directory,
+rewrite both its target and working directory to the newest release.
+
+Before handoff, resolve the shortcut through the Windows Shell, verify that its
+target exists, and confirm that the launched application's version matches the
+canonical version in `pyproject.toml`. Never leave the shortcut pointing to an
+older release merely because that older executable still exists. If the
+shortcut cannot be updated or verified, report the blocker explicitly.
+
 ## GitHub delivery
 
 After each feature is successfully implemented and its relevant checks pass,

@@ -14,11 +14,13 @@ import sys
 import threading
 import time
 from collections import deque
+from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QPointF, QProcess, QRectF, QSettings, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap
 from PySide6.QtWidgets import (
     QApplication,
+    QButtonGroup,
     QCheckBox,
     QComboBox,
     QDialog,
@@ -44,6 +46,7 @@ from PySide6.QtWidgets import (
     QMenu,
 )
 
+from framepilot_i18n import LANGUAGE_OPTIONS, SUPPORTED_LANGUAGES, Localizer, resource_path
 from steamvr_core import (
     AdaptiveRuntime,
     HardwareContext,
@@ -56,10 +59,21 @@ from steamvr_core import (
 )
 
 
-APP_VERSION = "0.7.4"
+APP_VERSION = "0.12.1"
+STEAMVR_LAUNCH_URI = "steam://rungameid/250820"
 TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
-ONBOARDING_REVISION = 2
-AUTO_UPLOAD_RETRY_SECONDS = 300
+ONBOARDING_REVISION = 5
+ONBOARDING_PAGE_BUILDERS = (
+    "_language_page",
+    "_quality_page",
+    "_target_page",
+    "_welcome_page",
+)
+ONBOARDING_PAGE_COUNT = len(ONBOARDING_PAGE_BUILDERS)
+AUTO_UPLOAD_MIN_INTERVAL_SECONDS = 15 * 60
+AUTO_UPLOAD_RECORD_THRESHOLD = 25
+AUTO_UPLOAD_MAX_BACKOFF_SECONDS = 2 * 60 * 60
+SHOW_AB_EXPERIMENT_UI = False
 
 OVERLAY_HOST = "127.0.0.1"
 OVERLAY_PORT = 39421
@@ -94,6 +108,60 @@ def setting_bool(settings: QSettings, key: str, default: bool = False) -> bool:
     if isinstance(value, bool):
         return value
     return str(value).strip().lower() in {"1", "true", "yes", "on"}
+
+
+def setting_number(settings: QSettings, key: str, default: float = 0.0) -> float:
+    try:
+        return float(settings.value(key, default))
+    except (TypeError, ValueError):
+        return float(default)
+
+
+def request_steamvr_start(
+    process_checker: Callable[[str], bool] = process_running,
+    url_opener: Callable[[str], object] | None = None,
+) -> tuple[str, str]:
+    """Request SteamVR startup through Steam without assuming an install path."""
+    if process_checker("vrserver.exe"):
+        return "already_running", ""
+    if url_opener is None:
+        url_opener = getattr(os, "startfile", None)
+    if url_opener is None:
+        return "unsupported", "Steam URL launching is unavailable on this platform"
+    try:
+        url_opener(STEAMVR_LAUNCH_URI)
+    except OSError as exc:
+        return "failed", str(exc)
+    return "requested", ""
+
+
+def auto_upload_due(
+    records: int,
+    uploaded_records: int,
+    now: float,
+    last_attempt_at: float,
+    next_allowed_at: float,
+    *,
+    force: bool = False,
+) -> tuple[bool, float]:
+    pending = max(0, int(records) - int(uploaded_records))
+    if pending <= 0:
+        return False, 0.0
+    if now < next_allowed_at:
+        return False, next_allowed_at
+    interval_due_at = (
+        last_attempt_at + AUTO_UPLOAD_MIN_INTERVAL_SECONDS
+        if last_attempt_at > 0.0
+        else now
+    )
+    if force or pending >= AUTO_UPLOAD_RECORD_THRESHOLD or now >= interval_due_at:
+        return True, now
+    return False, interval_due_at
+
+
+def cached_write_permission(settings: QSettings) -> bool:
+    """Restore the user's explicit SteamVR resolution-control choice."""
+    return setting_bool(settings, "runtime/armed", False)
 
 
 def compare_ab_results(results: list[dict[str, object]]) -> dict[str, object] | None:
@@ -142,13 +210,19 @@ ZH_EN = {
     "只读监控": "Read-only monitor",
     "单步自动调整": "One-step adjustment",
     "连续自适应": "Continuous adaptive",
-    "解锁 SteamVR 设置写入": "Unlock SteamVR setting writes",
+    "允许 FramePilot VR 调控 SteamVR 分辨率": "Allow FramePilot VR to control SteamVR resolution",
+    "启动 FramePilot VR 时自动启动 SteamVR": "Start SteamVR automatically with FramePilot VR",
     "退出时恢复启动值": "Restore startup value on exit",
-    "自适应参数": "Adaptive parameters",
+    "分辨率调节范围与规则": "Resolution adjustment range and rules",
+    "程序只自动改变分辨率，不会自行修改这些规则。": "The app changes only resolution; it does not rewrite these rules.",
     "最低": "Minimum",
     "最高": "Maximum",
-    "降档": "Step down",
-    "升档": "Step up",
+    "降档步长": "Step down",
+    "升档步长": "Step up",
+    "升档冷却": "Raise cooldown",
+    "升档后保护": "Post-raise protection",
+    "回退后禁升": "Raise lockout after rollback",
+    "升档 GPU 上限": "Raise GPU limit",
     "冷却": "Cooldown",
     "升档观察": "Raise observation",
     "应用控制参数": "Apply control parameters",
@@ -179,16 +253,204 @@ ZH_EN = {
     "等待有效采集记录": "Waiting for valid records",
     "导出共享数据": "Export sharing data",
     "上传共享数据": "Upload sharing data",
-    # Overlay strings intentionally live behind the existing i18n hook. The
-    # dogfood build remains Chinese-first while the feature is still moving.
+    "实时帧率": "Real-time frame rate",
+    "GPU 帧时间": "GPU frame time",
+    "CPU 帧时间": "CPU frame time",
+    "GPU 占用率": "GPU usage",
+    "CPU 占用率": "CPU usage",
+    "帧预算": "Frame budget",
+    "等效分辨率": "Equivalent resolution",
+    "SteamVR 比例": "SteamVR scale",
+    "调度动作": "Scheduler action",
+    "重投影": "Reprojection",
+    "VRC 世界与人数": "VRC world and population",
+    "首次使用引导": "First-use guide",
+    "使用引导": "Guide",
+    "上一步": "Back",
+    "下一步": "Next",
+    "开始使用": "Get started",
+    "选择你的语言": "Choose Your Language",
+    "选择最适合你的显示语言。之后可以随时在主面板中更改。": "Choose the display language that works best for you. You can change it later in the main panel.",
+    "选择语言后，界面会立即切换。": "The interface updates immediately when you select a language.",
+    "请先把串流画质调到最高档": "Set streaming quality to its highest preset first",
+    "动态分辨率需要以串流软件提供的最高基础画质为起点，否则面板只能在一个较低的编码分辨率上继续缩放。": "Dynamic resolution should start from the highest base quality offered by your streaming software; otherwise the panel can only scale a lower encoded resolution.",
+    "<b>PICO 互联：</b>选择“超高清+”<br><br><b>Virtual Desktop：</b>选择“Monster”<br><br>其他串流软件请选择设备与显卡能够使用的最高画质档。": "<b>PICO Connect:</b> choose “Ultra HD+”<br><br><b>Virtual Desktop:</b> choose “Monster”<br><br>For other streaming software, choose the highest quality preset supported by your device and GPU.",
+    "我已在串流软件中选择最高档画质": "I selected the highest streaming-quality preset",
+    "选择目标帧率": "Choose a target frame rate",
+    "这里选择的是动态分辨率使用的帧预算，不会替游戏安装限帧器。": "This selects the frame budget used by dynamic resolution; it does not install a frame limiter in the game.",
+    "原生刷新率 · 画面最流畅，性能要求最高": "Native refresh · Smoothest motion, highest performance demand",
+    "刷新率的 1/2 · 推荐从这里开始": "1/2 refresh · Recommended starting point",
+    "刷新率的 1/3 · 适合约 30 FPS 的高画质目标": "1/3 refresh · Suited to a high-quality target near 30 FPS",
+    "刷新率的 1/4 · 优先画质与重型场景": "1/4 refresh · Prioritizes quality and demanding scenes",
+    "不确定时选择 1/2；之后可以随时在主面板中修改。": "Choose 1/2 if unsure; you can change it later in the main panel.",
+    "欢迎使用 FramePilot VR": "Welcome to FramePilot VR",
+    "设置即将完成。是否允许 FramePilot VR 调控 SteamVR 分辨率，请由你手动选择。": "Setup is almost complete. Choose whether FramePilot VR may control SteamVR resolution.",
+    "自动上传匿名采集数据（推荐）": "Automatically upload anonymous collection data (recommended)",
+    "勾选后，现有及以后生成的尚未上传聚合记录会自动增量上传；可随时取消。包含世界 ID、人数范围、硬件型号、渲染设置和聚合性能指标；不包含玩家身份、实例 ID、机器名或硬件指纹。": "When enabled, existing and future pending aggregate records are uploaded incrementally; you can disable this at any time. Data includes world ID, population range, hardware model, render settings, and aggregate performance metrics; it excludes player identity, instance ID, machine name, and hardware fingerprint.",
+    "允许 FramePilot VR 调控 SteamVR 分辨率（保存此选择）": "Allow FramePilot VR to control SteamVR resolution (save this choice)",
+    "勾选后，单步、连续和手动操作可以修改当前游戏的 SteamVR resolutionScale。此选择会保存在本机，直到你主动取消。": "When enabled, one-step, continuous, and manual actions may change the current game's SteamVR resolutionScale. This choice is saved on this PC until you disable it.",
+    "第 {current} 步，共 {total} 步": "Step {current} of {total}",
+    "自动增量上传": "Automatic incremental upload",
+    "仅保存在本机": "Keep on this PC only",
+    "串流画质：已确认最高档": "Streaming quality: highest preset confirmed",
+    "目标帧率：{target}": "Target frame rate: {target}",
+    "匿名采集数据：{mode}": "Anonymous collection data: {mode}",
+    "SteamVR 分辨率控制：{mode}": "SteamVR resolution control: {mode}",
+    "已允许并保存": "Allowed and saved",
+    "保持锁定": "Locked",
+    "自动上传已启用": "Automatic upload enabled",
+    "仅本地采集": "Local collection only",
+    "首次使用引导完成": "First-use guide completed",
+    "等效分辨率（单眼）": "Equivalent resolution (per eye)",
+    "VR 参数叠加层": "VR metrics overlay",
+    "在头显中显示参数": "Show metrics in the headset",
+    "未启用": "Disabled",
+    "透明 OSD · 无图表 · 勾选需要显示的参数": "Transparent OSD · No charts · Select metrics to display",
+    "左上": "Upper left",
+    "右上": "Upper right",
+    "左下": "Lower left",
+    "右下": "Lower right",
+    "头显位置": "Headset position",
+    "显示大小": "Display size",
+    "正在启动": "Starting",
+    "等待 SteamVR": "Waiting for SteamVR",
+    "等待场景": "Waiting for scene",
+    "正常显示": "Active",
+    "错误": "Error",
+    "正在上传…": "Uploading…",
+    "{minutes} 分钟后重试": "Retry in {minutes} min",
+    "采集中": "Collecting",
+    "已暂停": "Paused",
+    "{prefix} · 世界 {worlds}/30 · 世界/人数场景 {contexts}\n稳定窗口 {steady} · 人数变化 {transitions} · {size_kib:.1f} KiB": "{prefix} · {worlds}/30 worlds · {contexts} world/population contexts\n{steady} steady windows · {transitions} population transitions · {size_kib:.1f} KiB",
+    "导出匿名共享数据": "Export anonymous sharing data",
+    "ZIP 压缩包 (*.zip)": "ZIP archive (*.zip)",
+    "导出失败": "Export failed",
+    "导出完成": "Export complete",
+    "上传暂缓": "Upload delayed",
+    "上传失败": "Upload failed",
+    "上传完成": "Upload complete",
+    "导出便携策略": "Export portable policy",
+    "JSON 策略 (*.json)": "JSON policy (*.json)",
+    "导入便携策略": "Import portable policy",
+    "等待数据": "Waiting for data",
+    "写入锁定": "Writes locked",
+    "开始精确阶梯校准": "Start precise stepped calibration",
+    "允许修改分辨率": "Allow resolution changes",
+    "应用分辨率": "Apply resolution",
+    "校准失败": "Calibration failed",
+    "需要先进入 VR 游戏并取得稳定帧时序。": "Enter a VR game and wait for stable frame timings first.",
+    "精确阶梯校准需要先允许 FramePilot VR 调控 SteamVR 分辨率。": "Allow FramePilot VR to control SteamVR resolution before precise stepped calibration.",
+    "校准会短暂测试当前值、-10% 和 +10%，结束后自动恢复原值。请保持在同一代表性场景。": "Calibration briefly tests the current value, -10%, and +10%, then restores the original value. Keep the same representative scene.",
+    "正在校准；请保持游戏场景与视角尽量稳定": "Calibrating; keep the game scene and view as stable as possible",
+    "允许后，单步、连续和手动模式都可以修改当前游戏的 SteamVR resolutionScale。\n\n此选择会保存在本机，直到你主动取消。建议先使用只读模式观察，再进行单步验证。": "When allowed, one-step, continuous, and manual modes may change the current game's SteamVR resolutionScale.\n\nThis choice is saved on this PC until you disable it. Observe in read-only mode first, then validate one step.",
+    "请先勾选“允许 FramePilot VR 调控 SteamVR 分辨率”。": "Enable “Allow FramePilot VR to control SteamVR resolution” first.",
+    "只读监控 · 不会修改 SteamVR": "READ-ONLY · SteamVR will not be modified",
+    "连续控制已启用 · 分辨率可能持续变化": "LIVE CONTROL ENABLED · Resolution may change continuously",
+    "已允许写入 · 单步和手动操作可能修改分辨率": "WRITES ALLOWED · One-step and manual actions may change resolution",
+    "当前设置低于配置下限": "Current setting is below the configured minimum",
+    "当前设置高于配置上限": "Current setting is above the configured maximum",
+    "GPU/交付压力高，但已到分辨率下限": "GPU/delivery pressure is high, but resolution is already at minimum",
+    "GPU 帧时间或重投影超过安全阈值": "GPU frame time or reprojection exceeded the safety threshold",
+    "CPU 受限；降低分辨率通常无效": "CPU-bound; lowering resolution is usually ineffective",
+    "性能余量充足，但已到分辨率上限": "Performance headroom is available, but resolution is already at maximum",
+    "处于滞回区间": "Within the hysteresis band",
+    "系统 GPU 已接近满载；保留余量并禁止升档": "System GPU is near saturation; preserving headroom and blocking resolution increases",
+    "当前没有 VR 场景应用，等待游戏提交画面": "No VR scene application; waiting for the game to submit frames",
+    "尚未取得帧时序；等待场景应用提交画面": "No frame timings yet; waiting for the scene application",
+    "控制参数已更新": "Control parameters updated",
+    "SteamVR 未运行，面板将自动重连": "SteamVR is not running; the panel will reconnect automatically",
+    "SteamVR 已连接": "SteamVR connected",
+    "连接已断开": "Disconnected",
+    "校准期间场景应用发生变化，已取消": "Scene application changed during calibration; calibration cancelled",
+    "写入锁尚未解锁": "Setting writes are still locked",
+    "当前没有场景应用": "No current scene application",
+    "没有可恢复的启动值": "No startup value is available to restore",
+    "性能余量已稳定": "Performance headroom stable for",
+    "性能余量观察中": "Observing performance headroom",
+    "GPU 余量不足以回升": "Insufficient GPU headroom to raise",
+    "CPU 波动超过回升线": "CPU variation exceeds the raise threshold",
+    "检测到重投影": "Reprojection detected",
+    "暂缓回升": "raise deferred",
+    "等待形成连续稳定余量": "Waiting for continuous stable headroom",
+    "单次升档限制为": "Per-raise step limited to",
+    "已连接 SteamVR": "Connected to SteamVR",
+    "推荐目标": "recommended target",
+    "硬件配置": "Hardware profile",
+    "场景应用": "Scene application",
+    "显式设置": "explicit setting",
+    "默认值": "default",
+    "检测到外部设置变化": "External setting change detected",
+    "开始精确阶梯校准": "Started precise stepped calibration",
+    "开始只读校准": "Started read-only calibration",
+    "个阶段": "stages",
+    "校准完成": "Calibration complete",
+    "建议": "recommended",
+    "检测为 CPU 受限": "CPU-bound detected",
+    "校准阶段切换到": "Calibration stage changed to",
+    "取消校准时恢复失败": "Failed to restore while cancelling calibration",
+    "无法开始校准": "Unable to start calibration",
+    "阶段": "Stage",
+    "日志已创建": "Log created",
+    "SteamVR 采样失败": "SteamVR sampling failed",
+    "已恢复": "restored to",
+    "恢复": "Restore",
+    "失败": "failed",
+    "手动应用": "manual apply",
+    "自动应用": "Automatically applied",
+    "截图已保存": "Screenshot saved",
+    "便携策略已导出": "Portable policy exported",
+    "已导入便携策略": "Portable policy imported",
+    "读取本机校准失败": "Failed to read local calibration",
+    "秒": "s",
+    "旧策略自定义": "Legacy custom",
+    "原生": "native",
+    "旧策略": "legacy",
+    "目标": "target",
+    "基准": "base",
+    "系统 CPU": "System CPU",
+    "写入": "writes",
+    "当前建议": "Current recommendation",
+    "语言已切换": "Language switched",
+    "SteamVR 已在运行，已跳过自动启动": "SteamVR is already running; automatic startup was skipped",
+    "已请求 Steam 启动 SteamVR": "Requested Steam to start SteamVR",
+    "无法自动启动 SteamVR": "Unable to start SteamVR automatically",
+    "保存此选项；从下次启动 FramePilot VR 起生效。": "Save this option; it takes effect the next time FramePilot VR starts.",
+    "未勾选时只监控和推荐，不会写入 SteamVR。勾选后，单步、连续和手动操作可修改当前游戏的 resolutionScale；此选择会保存到本机。": "When cleared, the app only monitors and recommends without writing to SteamVR. When selected, one-step, continuous, and manual actions may change the current game's resolutionScale; this choice is saved on this PC.",
+    "导入失败": "Import failed",
+    "共享数据正在上传": "Sharing data is already uploading",
+    "VR 参数叠加层已启动；SteamVR 未运行时会自动等待": "VR metrics overlay started; it will wait automatically when SteamVR is not running",
+    "VR 叠加层异常退出，代码": "VR overlay exited unexpectedly, code",
+    "VR 叠加层启动失败": "VR overlay failed to start",
+    "匿名共享数据已导出": "Anonymous sharing data exported",
+    "可供后期上传的压缩包已保存到：\n{path}\n\n其中不包含玩家身份、实例 ID、机器名或硬件指纹。": "Upload-ready archive saved to:\n{path}\n\nNo player identity, instance ID, machine name, or hardware fingerprint is included.",
+    "服务器要求暂缓上传，请在约 {minutes} 分钟后重试。本地记录仍安全保留，没有被删除。": "The server asked this client to wait. Try again in {minutes} minute(s). Local records are safe and have not been deleted.",
+    "是否把尚未上传的本地记录发送到 FramePilot 共享服务？\n\n包含：世界 ID、人数区间与变化、GPU/HMD 型号、GPU 显存、CPU 型号与核心/线程数、系统内存、渲染设置和聚合性能指标。\n\n不包含：玩家身份、VRChat 实例 ID、机器名或硬件指纹。只有本次确认后才会上传。": "Upload all new local records to the FramePilot sharing service?\n\nIncluded: world ID, population ranges and changes, GPU/HMD model, GPU VRAM, CPU model and core/thread counts, system RAM, render settings, and aggregated performance metrics.\n\nExcluded: player identity, VRChat instance ID, machine name, and hardware fingerprint. Uploading happens only after this confirmation.",
+    "开始自动上传新增匿名记录": "Started automatic upload of new anonymous records",
+    "开始上传匿名共享数据": "Started anonymous sharing-data upload",
+    "上传暂时受限，本地记录仍安全保留；约 {minutes} 分钟后重试。": "Upload is temporarily delayed; local records are safe. Retrying in about {minutes} minute(s).",
+    "没有需要上传的新记录。": "No new records need uploading.",
+    "上传完成：服务器接收 {accepted} 条，重复 {duplicates} 条，共 {batches} 个批次。": "Upload complete: {accepted} accepted, {duplicates} duplicate record(s), across {batches} batch(es).",
+    "\n仍有记录未上传，请再次点击“上传共享数据”继续。": "\nSome records remain; click Upload again to continue.",
+    "已导出阈值、步长和时间窗口。硬件指纹与本机最终分辨率未被导出。": "Thresholds, steps, and timing windows were exported. The hardware fingerprint and local final resolution were excluded.",
+    "策略已迁移；当前保持只读，请在本机运行校准后采用分辨率范围": "Policy imported in read-only mode; run local calibration before adopting a resolution range",
+    "只读估算": "Read-only estimate",
+    "CPU 受限，建议未主动降分辨率": "CPU-bound; resolution was not proactively lowered",
+    "场景校准完成 · {precision} · 建议 {recommended}% · 范围 {minimum}–{maximum}%{bound}": "Scene calibration complete · {precision} · recommended {recommended}% · range {minimum}–{maximum}%{bound}",
+    "将当前场景应用从 {current}% 调整为 {target}%？": "Change the current scene application from {current}% to {target}%?",
+    "目标 {cadence} ({fps:g} FPS)": "target {cadence} ({fps:g} FPS)",
+    "帧预算 {budget:.2f} ms · {ratio:.0f}%": "Frame budget {budget:.2f} ms · {ratio:.0f}%",
+    "系统 CPU {value:.0f}%": "System CPU {value:.0f}%",
+    "SteamVR {scale}% · 建议 {arrow} {proposed}%": "SteamVR {scale}% · Recommended {arrow} {proposed}%",
+    "{refresh:.0f} Hz · {target} · 基准 {width}×{height} · 写入 {count} 次": "{refresh:.0f} Hz · {target} · base {width}×{height} · writes {count}",
+    "当前建议：{proposed}%": "Current recommendation: {proposed}%",
 }
-EN_ZH = {value: key for key, value in ZH_EN.items()}
+LOCALIZER = Localizer(ZH_EN)
 
 
 STYLE = """
 QWidget {
     color: #E8EDF4;
-    font-family: "Segoe UI", "Microsoft YaHei UI";
+    font-family: "Segoe UI", "Microsoft YaHei UI", "Yu Gothic UI", "Meiryo UI", "Malgun Gothic";
     font-size: 13px;
 }
 QMainWindow, QWidget#Root { background: #0B1017; }
@@ -373,7 +635,7 @@ class PerformanceChart(QWidget):
         budget_pen = QPen(QColor("#E7D36A"), 1.5, Qt.PenStyle.DashLine)
         painter.setPen(budget_pen)
         painter.drawLine(QPointF(rect.left(), budget_y), QPointF(rect.right(), budget_y))
-        budget_label = "Frame budget" if self.language == "en" else "帧预算"
+        budget_label = LOCALIZER.translate("帧预算", self.language)
         painter.drawText(QRectF(rect.right() - 115, budget_y - 20, 110, 18), Qt.AlignmentFlag.AlignRight, budget_label)
 
         def draw_series(series: deque[float], color: str) -> None:
@@ -403,15 +665,27 @@ class OnboardingDialog(QDialog):
     def __init__(self, main_window: "MainWindow") -> None:
         super().__init__(main_window)
         self.main_window = main_window
-        self.setWindowTitle("首次使用引导")
+        self.setWindowTitle(self.main_window.tr("首次使用引导"))
         self.setModal(True)
         self.setMinimumSize(640, 500)
         self.resize(680, 540)
         self.setStyleSheet(
             "QDialog{background:#0B1017;}"
             "QLabel#GuideTitle{font-size:25px;font-weight:700;color:#F4F7FB;}"
-            "QLabel#GuideStep{color:#42D7FF;font-weight:650;}"
+            "QLabel#GuideHeroTitle{font-size:30px;font-weight:700;color:#F7F8FA;}"
+            "QLabel#GuideStep{color:#8E99A8;font-weight:600;}"
             "QLabel#GuideCard{background:#111923;border:1px solid #26384C;border-radius:10px;padding:14px;}"
+            "QPushButton#LanguageChoice{background:#141A22;border:1px solid #2A3442;"
+            "border-radius:14px;padding:15px 18px;color:#F4F7FB;font-size:15px;"
+            "font-weight:600;text-align:left;}"
+            "QPushButton#LanguageChoice:hover{background:#19212B;border-color:#596779;}"
+            "QPushButton#LanguageChoice:checked{background:#0A84FF;border-color:#66B2FF;color:white;}"
+            "QPushButton#GuideNav{background:transparent;border:1px solid #354150;"
+            "border-radius:9px;padding:9px 20px;color:#DDE4EC;font-weight:600;}"
+            "QPushButton#GuideNav:hover{background:#151D27;border-color:#667486;}"
+            "QPushButton#Primary{background:#0A84FF;border:1px solid #0A84FF;"
+            "border-radius:9px;padding:9px 22px;color:white;font-weight:650;}"
+            "QPushButton#Primary:hover{background:#2997FF;border-color:#2997FF;}"
             "QPushButton#Primary:disabled{background:#151C25;border-color:#222C38;color:#5E6A78;}"
         )
 
@@ -420,20 +694,22 @@ class OnboardingDialog(QDialog):
         root.setSpacing(18)
         self.step_label = QLabel()
         self.step_label.setObjectName("GuideStep")
+        self.step_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         root.addWidget(self.step_label)
 
         self.pages = QStackedWidget()
-        self.pages.addWidget(self._quality_page())
-        self.pages.addWidget(self._target_page())
-        self.pages.addWidget(self._welcome_page())
+        for builder_name in ONBOARDING_PAGE_BUILDERS:
+            self.pages.addWidget(getattr(self, builder_name)())
         self.pages.currentChanged.connect(self._page_changed)
         root.addWidget(self.pages, 1)
 
         navigation = QHBoxLayout()
-        self.back_button = QPushButton("上一步")
+        self.back_button = QPushButton(self.main_window.tr("上一步"))
+        self.back_button.setObjectName("GuideNav")
         self.back_button.clicked.connect(self.previous_page)
-        self.next_button = QPushButton("下一步")
+        self.next_button = QPushButton(self.main_window.tr("下一步"))
         self.next_button.setObjectName("Primary")
+        self.next_button.setMinimumWidth(104)
         self.next_button.clicked.connect(self.next_page)
         navigation.addWidget(self.back_button)
         navigation.addStretch()
@@ -448,52 +724,117 @@ class OnboardingDialog(QDialog):
         label.setWordWrap(True)
         return label
 
+    def _language_page(self) -> QWidget:
+        tr = self.main_window.tr
+        page = QWidget()
+        layout = QVBoxLayout(page)
+        layout.setContentsMargins(28, 18, 28, 6)
+        layout.setSpacing(12)
+
+        self.language_title = QLabel(tr("选择你的语言"))
+        self.language_title.setObjectName("GuideHeroTitle")
+        self.language_title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.language_title.setWordWrap(True)
+        layout.addWidget(self.language_title)
+
+        self.language_subtitle = QLabel(
+            tr("选择最适合你的显示语言。之后可以随时在主面板中更改。")
+        )
+        self.language_subtitle.setObjectName("Muted")
+        self.language_subtitle.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.language_subtitle.setWordWrap(True)
+        layout.addWidget(self.language_subtitle)
+        layout.addSpacing(10)
+
+        choices = QGridLayout()
+        choices.setHorizontalSpacing(12)
+        choices.setVerticalSpacing(12)
+        self.language_button_group = QButtonGroup(self)
+        self.language_button_group.setExclusive(True)
+        self.language_buttons: dict[str, QPushButton] = {}
+        for index, (code, native_name) in enumerate(LANGUAGE_OPTIONS):
+            button = QPushButton(native_name)
+            button.setObjectName("LanguageChoice")
+            button.setCheckable(True)
+            button.setMinimumHeight(56)
+            button.setCursor(Qt.CursorShape.PointingHandCursor)
+            button.setChecked(code == self.main_window.language)
+            button.toggled.connect(
+                lambda checked, language=code: self._select_language(language)
+                if checked
+                else None
+            )
+            self.language_button_group.addButton(button)
+            self.language_buttons[code] = button
+            row, column = divmod(index, 2)
+            if index == len(LANGUAGE_OPTIONS) - 1:
+                choices.addWidget(button, row, 0, 1, 2)
+            else:
+                choices.addWidget(button, row, column)
+        layout.addLayout(choices)
+
+        self.language_hint = QLabel(tr("选择语言后，界面会立即切换。"))
+        self.language_hint.setObjectName("Muted")
+        self.language_hint.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        layout.addWidget(self.language_hint)
+        layout.addStretch()
+        return page
+
+    def _select_language(self, language: str) -> None:
+        index = self.main_window.language_combo.findData(language)
+        if index >= 0:
+            self.main_window.language_combo.setCurrentIndex(index)
+
     def _quality_page(self) -> QWidget:
+        tr = self.main_window.tr
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
-        layout.addWidget(self._title("请先把串流画质调到最高档"))
+        layout.addWidget(self._title(tr("请先把串流画质调到最高档")))
         text = QLabel(
-            "动态分辨率需要以串流软件提供的最高基础画质为起点，否则面板只能在一个较低的编码分辨率上继续缩放。"
+            tr("动态分辨率需要以串流软件提供的最高基础画质为起点，否则面板只能在一个较低的编码分辨率上继续缩放。")
         )
         text.setWordWrap(True)
         text.setObjectName("Muted")
         layout.addWidget(text)
         examples = QLabel(
-            "<b>PICO 互联：</b>选择“超高清+”<br><br>"
-            "<b>Virtual Desktop：</b>选择“Monster”<br><br>"
-            "其他串流软件请选择设备与显卡能够使用的最高画质档。"
+            tr(
+                "<b>PICO 互联：</b>选择“超高清+”<br><br>"
+                "<b>Virtual Desktop：</b>选择“Monster”<br><br>"
+                "其他串流软件请选择设备与显卡能够使用的最高画质档。"
+            )
         )
         examples.setObjectName("GuideCard")
         examples.setWordWrap(True)
         layout.addWidget(examples)
-        self.quality_confirm = QCheckBox("我已在串流软件中选择最高档画质")
+        self.quality_confirm = QCheckBox(tr("我已在串流软件中选择最高档画质"))
         self.quality_confirm.toggled.connect(self._update_next_enabled)
         layout.addWidget(self.quality_confirm)
         layout.addStretch()
         return page
 
     def _target_page(self) -> QWidget:
+        tr = self.main_window.tr
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
-        layout.addWidget(self._title("选择目标帧率"))
-        text = QLabel("这里选择的是动态分辨率使用的帧预算，不会替游戏安装限帧器。")
+        layout.addWidget(self._title(tr("选择目标帧率")))
+        text = QLabel(tr("这里选择的是动态分辨率使用的帧预算，不会替游戏安装限帧器。"))
         text.setWordWrap(True)
         text.setObjectName("Muted")
         layout.addWidget(text)
         self.guide_target_combo = QComboBox()
-        self.guide_target_combo.addItem("原生刷新率 · 画面最流畅，性能要求最高", 1)
-        self.guide_target_combo.addItem("刷新率的 1/2 · 推荐从这里开始", 2)
-        self.guide_target_combo.addItem("刷新率的 1/3 · 适合约 30 FPS 的高画质目标", 3)
-        self.guide_target_combo.addItem("刷新率的 1/4 · 优先画质与重型场景", 4)
+        self.guide_target_combo.addItem(tr("原生刷新率 · 画面最流畅，性能要求最高"), 1)
+        self.guide_target_combo.addItem(tr("刷新率的 1/2 · 推荐从这里开始"), 2)
+        self.guide_target_combo.addItem(tr("刷新率的 1/3 · 适合约 30 FPS 的高画质目标"), 3)
+        self.guide_target_combo.addItem(tr("刷新率的 1/4 · 优先画质与重型场景"), 4)
         current_divisor = int(self.main_window.target_fps_combo.currentData())
         current_index = self.guide_target_combo.findData(current_divisor)
         self.guide_target_combo.setCurrentIndex(max(0, current_index))
         layout.addWidget(self.guide_target_combo)
-        hint = QLabel("不确定时选择 1/2；之后可以随时在主面板中修改。")
+        hint = QLabel(tr("不确定时选择 1/2；之后可以随时在主面板中修改。"))
         hint.setObjectName("GuideCard")
         hint.setWordWrap(True)
         layout.addWidget(hint)
@@ -501,13 +842,14 @@ class OnboardingDialog(QDialog):
         return page
 
     def _welcome_page(self) -> QWidget:
+        tr = self.main_window.tr
         page = QWidget()
         layout = QVBoxLayout(page)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(14)
-        layout.addWidget(self._title("欢迎使用 FramePilot VR"))
+        layout.addWidget(self._title(tr("欢迎使用 FramePilot VR")))
         text = QLabel(
-            "设置已经准备完成。面板会先保持只读监控，让你观察帧时间、GPU 压力和推荐分辨率。"
+            tr("设置即将完成。是否允许 FramePilot VR 调控 SteamVR 分辨率，请由你手动选择。")
         )
         text.setWordWrap(True)
         layout.addWidget(text)
@@ -515,7 +857,7 @@ class OnboardingDialog(QDialog):
         self.guide_summary.setObjectName("GuideCard")
         self.guide_summary.setWordWrap(True)
         layout.addWidget(self.guide_summary)
-        self.guide_auto_upload = QCheckBox("自动上传匿名采集数据（推荐）")
+        self.guide_auto_upload = QCheckBox(tr("自动上传匿名采集数据（推荐）"))
         self.guide_auto_upload.setChecked(
             setting_bool(self.main_window.settings, "collection/auto_upload", True)
             if self.main_window.settings.contains("collection/auto_upload")
@@ -524,38 +866,92 @@ class OnboardingDialog(QDialog):
         self.guide_auto_upload.toggled.connect(self._refresh_summary)
         layout.addWidget(self.guide_auto_upload)
         upload_hint = QLabel(
-            "勾选后，现有及以后生成的尚未上传聚合记录会自动增量上传；可随时取消。"
-            "包含世界 ID、人数范围、硬件型号、渲染设置和聚合性能指标；"
-            "不包含玩家身份、实例 ID、机器名或硬件指纹。"
+            tr(
+                "勾选后，现有及以后生成的尚未上传聚合记录会自动增量上传；可随时取消。"
+                "包含世界 ID、人数范围、硬件型号、渲染设置和聚合性能指标；"
+                "不包含玩家身份、实例 ID、机器名或硬件指纹。"
+            )
         )
         upload_hint.setObjectName("Muted")
         upload_hint.setWordWrap(True)
         layout.addWidget(upload_hint)
-        safety = QLabel("确认数据正常后，再从主面板解锁 SteamVR 设置写入。")
-        safety.setObjectName("Muted")
-        safety.setWordWrap(True)
-        layout.addWidget(safety)
+        self.guide_allow_resolution = QCheckBox(
+            tr("允许 FramePilot VR 调控 SteamVR 分辨率（保存此选择）")
+        )
+        self.guide_allow_resolution.setChecked(self.main_window.arm_check.isChecked())
+        self.guide_allow_resolution.toggled.connect(self._refresh_summary)
+        layout.addWidget(self.guide_allow_resolution)
+        resolution_hint = QLabel(
+            tr(
+                "勾选后，单步、连续和手动操作可以修改当前游戏的 SteamVR resolutionScale。"
+                "此选择会保存在本机，直到你主动取消。"
+            )
+        )
+        resolution_hint.setObjectName("Muted")
+        resolution_hint.setWordWrap(True)
+        layout.addWidget(resolution_hint)
         layout.addStretch()
         return page
 
     def _update_next_enabled(self) -> None:
-        self.next_button.setEnabled(self.pages.currentIndex() != 0 or self.quality_confirm.isChecked())
+        self.next_button.setEnabled(
+            self.pages.currentIndex() != 1 or self.quality_confirm.isChecked()
+        )
 
     def _page_changed(self, index: int) -> None:
-        self.step_label.setText(f"第 {index + 1} 步，共 3 步")
+        self.step_label.setText(
+            self.main_window.trf(
+                "第 {current} 步，共 {total} 步",
+                current=index + 1,
+                total=ONBOARDING_PAGE_COUNT,
+            )
+        )
         self.back_button.setVisible(index > 0)
-        self.next_button.setText("开始使用" if index == 2 else "下一步")
-        if index == 2:
+        self.next_button.setText(
+            self.main_window.tr(
+                "开始使用"
+                if index == ONBOARDING_PAGE_COUNT - 1
+                else "下一步"
+            )
+        )
+        if index == ONBOARDING_PAGE_COUNT - 1:
             self._refresh_summary()
         self._update_next_enabled()
 
+    def retranslate_ui(self) -> None:
+        tr = self.main_window.tr
+        self.setWindowTitle(tr("首次使用引导"))
+        self.language_title.setText(tr("选择你的语言"))
+        self.language_subtitle.setText(
+            tr("选择最适合你的显示语言。之后可以随时在主面板中更改。")
+        )
+        self.language_hint.setText(tr("选择语言后，界面会立即切换。"))
+        target_names = (
+            "原生刷新率 · 画面最流畅，性能要求最高",
+            "刷新率的 1/2 · 推荐从这里开始",
+            "刷新率的 1/3 · 适合约 30 FPS 的高画质目标",
+            "刷新率的 1/4 · 优先画质与重型场景",
+        )
+        for index, source in enumerate(target_names):
+            self.guide_target_combo.setItemText(index, tr(source))
+        for code, button in self.language_buttons.items():
+            button.blockSignals(True)
+            button.setChecked(code == self.main_window.language)
+            button.blockSignals(False)
+        self._page_changed(self.pages.currentIndex())
+
     def _refresh_summary(self) -> None:
-        upload_text = "自动增量上传" if self.guide_auto_upload.isChecked() else "仅保存在本机"
+        upload_text = self.main_window.tr(
+            "自动增量上传" if self.guide_auto_upload.isChecked() else "仅保存在本机"
+        )
+        resolution_text = self.main_window.tr(
+            "已允许并保存" if self.guide_allow_resolution.isChecked() else "保持锁定"
+        )
         self.guide_summary.setText(
-            "✓ 串流画质：已确认最高档<br><br>"
-            f"✓ 目标帧率：{self.guide_target_combo.currentText()}<br><br>"
-            f"✓ 匿名采集数据：{upload_text}<br><br>"
-            "✓ 初始状态：只读监控"
+            f"✓ {self.main_window.tr('串流画质：已确认最高档')}<br><br>"
+            f"✓ {self.main_window.trf('目标帧率：{target}', target=self.guide_target_combo.currentText())}<br><br>"
+            f"✓ {self.main_window.trf('匿名采集数据：{mode}', mode=upload_text)}<br><br>"
+            f"✓ {self.main_window.trf('SteamVR 分辨率控制：{mode}', mode=resolution_text)}"
         )
 
     def previous_page(self) -> None:
@@ -563,23 +959,35 @@ class OnboardingDialog(QDialog):
 
     def next_page(self) -> None:
         index = self.pages.currentIndex()
-        if index == 0 and not self.quality_confirm.isChecked():
+        if index == 1 and not self.quality_confirm.isChecked():
             return
-        if index < 2:
+        if index < ONBOARDING_PAGE_COUNT - 1:
             self.pages.setCurrentIndex(index + 1)
             return
         divisor = int(self.guide_target_combo.currentData())
         target_index = self.main_window.target_fps_combo.findData(divisor)
         if target_index >= 0:
             self.main_window.target_fps_combo.setCurrentIndex(target_index)
+        self.main_window.mode_combo.blockSignals(True)
+        self.main_window.mode_combo.setCurrentIndex(
+            self.main_window.mode_combo.findData("monitor")
+        )
+        self.main_window.mode_combo.blockSignals(False)
+        self.main_window.arm_check.blockSignals(True)
+        self.main_window.arm_check.setChecked(self.guide_allow_resolution.isChecked())
+        self.main_window.arm_check.blockSignals(False)
         self.main_window.set_auto_upload_enabled(self.guide_auto_upload.isChecked())
         self.main_window.settings.setValue("onboarding/completed", True)
         self.main_window.settings.setValue("onboarding/revision", ONBOARDING_REVISION)
         self.main_window.settings.sync()
         self.main_window.apply_config()
-        upload_text = "自动上传已启用" if self.guide_auto_upload.isChecked() else "仅本地采集"
+        upload_text = self.main_window.tr(
+            "自动上传已启用" if self.guide_auto_upload.isChecked() else "仅本地采集"
+        )
         self.main_window.append_event(
-            "success", f"首次使用引导完成 · 目标刷新率 1/{divisor} · {upload_text}"
+            "success",
+            f"{self.main_window.tr('首次使用引导完成')} · "
+            f"{self.main_window.tr('目标')} 1/{divisor} · {upload_text}",
         )
         self.accept()
 
@@ -620,6 +1028,7 @@ class MonitorWorker(QObject):
         self._hardware_emitted = ""
         self.overlay_fields = list(DEFAULT_OVERLAY_FIELDS)
         self.overlay_config = {"anchor": "upper_left", "size_pct": 100}
+        self.overlay_language = "zh"
         self.overlay_socket = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
 
     def submit_config(self, config: RuntimeConfig) -> None:
@@ -640,14 +1049,33 @@ class MonitorWorker(QObject):
     def submit_collection_upload(self, automatic: bool = False) -> None:
         self.commands.put(("collection_upload", bool(automatic)))
 
-    def submit_overlay_settings(self, fields: list[str], anchor: str, size_pct: int) -> None:
+    def submit_overlay_settings(
+        self,
+        fields: list[str],
+        anchor: str,
+        size_pct: int,
+        language: str,
+    ) -> None:
         self.commands.put(
-            ("overlay_settings", {"fields": list(fields), "anchor": anchor, "size_pct": int(size_pct)})
+            (
+                "overlay_settings",
+                {
+                    "fields": list(fields),
+                    "anchor": anchor,
+                    "size_pct": int(size_pct),
+                    "language": language,
+                },
+            )
         )
 
     def _send_overlay_packet(self, data: dict[str, object] | None = None) -> None:
         packet = json.dumps(
-            {"data": data, "visible_fields": self.overlay_fields, "config": self.overlay_config},
+            {
+                "data": data,
+                "visible_fields": self.overlay_fields,
+                "config": self.overlay_config,
+                "language": self.overlay_language,
+            },
             ensure_ascii=False,
         ).encode("utf-8")
         try:
@@ -716,6 +1144,10 @@ class MonitorWorker(QObject):
                         "anchor": anchor,
                         "size_pct": max(70, min(140, int(options.get("size_pct", 100)))),
                     }
+                    language = str(options.get("language", "zh"))
+                    self.overlay_language = (
+                        language if language in SUPPORTED_LANGUAGES else "zh"
+                    )
                     self._send_overlay_packet()
                 elif command == "calibrate":
                     self._start_calibration(payload)  # type: ignore[arg-type]
@@ -744,7 +1176,14 @@ class MonitorWorker(QObject):
         try:
             result = self.passive_collector.upload_pending(TELEMETRY_UPLOAD_ENDPOINT)
         except Exception as exc:
-            result = {"ok": False, "error": str(exc)}
+            result = {
+                "ok": False,
+                "error": str(exc),
+                "http_status": int(getattr(exc, "http_status", 0)),
+                "retry_after_seconds": int(
+                    getattr(exc, "retry_after_seconds", 0)
+                ),
+            }
         finally:
             with self._collection_upload_lock:
                 self._collection_upload_active = False
@@ -891,7 +1330,7 @@ class MonitorWorker(QObject):
             raise RuntimeError("尚未取得 VR 游戏帧时序，暂时不能校准")
         precise = bool(options.get("precise", False))
         if precise and not self.runtime.config.armed:
-            raise PermissionError("精确校准需要先解锁 SteamVR 设置写入")
+            raise PermissionError("精确校准需要先允许 FramePilot VR 调控 SteamVR 分辨率")
         original = int(self.runtime.current_scale)
         stages = [original]
         if precise:
@@ -1083,16 +1522,45 @@ class MainWindow(QMainWindow):
         self.last_collection_status: dict[str, object] = {}
         self._collection_uploading = False
         self._collection_upload_is_automatic = False
-        self._auto_upload_last_attempted_records = 0
         self.settings = QSettings("OpenAI-Codex", "SteamVRAdaptiveResolution")
+        self._auto_upload_last_success_records = int(
+            setting_number(
+                self.settings,
+                "collection/auto_upload_last_success_records",
+                0,
+            )
+        )
+        self._auto_upload_last_attempt_at = setting_number(
+            self.settings,
+            "collection/auto_upload_last_attempt_at",
+            0.0,
+        )
+        self._auto_upload_next_allowed_at = setting_number(
+            self.settings,
+            "collection/auto_upload_next_allowed_at",
+            0.0,
+        )
+        self._upload_rate_limited_until = setting_number(
+            self.settings,
+            "collection/upload_rate_limited_until",
+            0.0,
+        )
+        self._auto_upload_failure_count = int(
+            setting_number(
+                self.settings,
+                "collection/auto_upload_failure_count",
+                0,
+            )
+        )
         self._auto_upload_retry_timer = QTimer(self)
         self._auto_upload_retry_timer.setSingleShot(True)
-        self._auto_upload_retry_timer.setInterval(AUTO_UPLOAD_RETRY_SECONDS * 1000)
         self._auto_upload_retry_timer.timeout.connect(
             lambda: self._maybe_auto_upload(force=True)
         )
         saved_language = str(self.settings.value("language", "zh"))
-        self.language = language_override or (saved_language if saved_language in {"zh", "en"} else "zh")
+        self.language = language_override or (
+            saved_language if saved_language in SUPPORTED_LANGUAGES else "zh"
+        )
         self.advanced_mode = str(self.settings.value("advanced_mode", "false")).lower() == "true"
         self._loading_controls = False
         self.legacy_target_fps = 0.0
@@ -1136,6 +1604,7 @@ class MainWindow(QMainWindow):
         self._setup_tray()
         self._sync_overlay_process()
         self._send_overlay_settings()
+        QTimer.singleShot(0, self._autostart_steamvr_if_enabled)
         QTimer.singleShot(500, self.maybe_show_onboarding)
 
         if screenshot_path is not None:
@@ -1161,9 +1630,11 @@ class MainWindow(QMainWindow):
         header.addLayout(title_box)
         header.addStretch()
         self.language_combo = QComboBox()
-        self.language_combo.addItem("中文", "zh")
-        self.language_combo.addItem("English", "en")
-        self.language_combo.setCurrentIndex(0 if self.language == "zh" else 1)
+        for language_code, language_label in LANGUAGE_OPTIONS:
+            self.language_combo.addItem(language_label, language_code)
+        self.language_combo.setCurrentIndex(
+            max(0, self.language_combo.findData(self.language))
+        )
         self.language_combo.currentIndexChanged.connect(self.language_changed)
         header.addWidget(self.language_combo)
         self.guide_button = QPushButton("使用引导")
@@ -1183,6 +1654,12 @@ class MainWindow(QMainWindow):
         header.addSpacing(12)
         header.addWidget(self.connection_label)
         outer.addLayout(header)
+
+        self.write_status_label = QLabel()
+        self.write_status_label.setWordWrap(True)
+        self.write_status_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        outer.addWidget(self.write_status_label)
+        self._update_write_status_banner()
 
         cards = QGridLayout()
         cards.setHorizontalSpacing(11)
@@ -1208,6 +1685,7 @@ class MainWindow(QMainWindow):
         chart_title.setStyleSheet("font-weight: 650; font-size: 14px;")
         self.hmd_label = QLabel("HMD —")
         self.hmd_label.setObjectName("Muted")
+        self.hmd_label.setMaximumWidth(520)
         chart_header.addWidget(chart_title)
         chart_header.addStretch()
         chart_header.addWidget(self.hmd_label)
@@ -1253,7 +1731,24 @@ class MainWindow(QMainWindow):
         target_hint.setWordWrap(True)
         target_hint.setObjectName("Muted")
         mode_layout.addWidget(target_hint)
-        self.arm_check = QCheckBox("解锁 SteamVR 设置写入")
+        self.steamvr_autostart_check = QCheckBox("启动 FramePilot VR 时自动启动 SteamVR")
+        self.steamvr_autostart_check.setChecked(
+            setting_bool(self.settings, "startup/steamvr_autostart", False)
+        )
+        self.steamvr_autostart_check.setToolTip(
+            self.tr("保存此选项；从下次启动 FramePilot VR 起生效。")
+        )
+        self.steamvr_autostart_check.toggled.connect(
+            self.steamvr_autostart_changed
+        )
+        mode_layout.addWidget(self.steamvr_autostart_check)
+        self.arm_check = QCheckBox("允许 FramePilot VR 调控 SteamVR 分辨率")
+        self.arm_check.setToolTip(
+            self.tr(
+                "未勾选时只监控和推荐，不会写入 SteamVR。"
+                "勾选后，单步、连续和手动操作可修改当前游戏的 resolutionScale；此选择会保存到本机。"
+            )
+        )
         self.arm_check.stateChanged.connect(self.arm_changed)
         self.restore_exit_check = QCheckBox("退出时恢复启动值")
         self.restore_exit_check.setChecked(True)
@@ -1344,7 +1839,7 @@ class MainWindow(QMainWindow):
         overlay_layout.addWidget(self.overlay_advanced)
         controls_layout.addWidget(self.overlay_group)
 
-        self.range_group = QGroupBox("自适应参数")
+        self.range_group = QGroupBox("分辨率调节范围与规则")
         grid = QGridLayout(self.range_group)
         self.min_spin = make_spin(20, 500, 30, "%")
         self.max_spin = make_spin(20, 500, 150, "%")
@@ -1359,6 +1854,7 @@ class MainWindow(QMainWindow):
             ("最低", self.min_spin),
             ("最高", self.max_spin),
             ("降档步长", self.down_spin),
+            ("升档步长", self.up_spin),
             ("升档冷却", self.cooldown_spin),
             ("升档观察", self.stable_spin),
             ("升档后保护", self.up_observation_spin),
@@ -1369,9 +1865,13 @@ class MainWindow(QMainWindow):
             grid.addWidget(QLabel(label), row, 0)
             grid.addWidget(widget, row, 1)
             widget.valueChanged.connect(lambda _value: self.apply_config())
+        rules_hint = QLabel("程序只自动改变分辨率，不会自行修改这些规则。")
+        rules_hint.setWordWrap(True)
+        rules_hint.setObjectName("Muted")
+        grid.addWidget(rules_hint, len(controls_list), 0, 1, 2)
         self.save_config_button = QPushButton("应用控制参数")
         self.save_config_button.clicked.connect(self.apply_config)
-        grid.addWidget(self.save_config_button, len(controls_list), 0, 1, 2)
+        grid.addWidget(self.save_config_button, len(controls_list) + 1, 0, 1, 2)
         self.save_config_button.setVisible(False)
         controls_layout.addWidget(self.range_group)
 
@@ -1417,8 +1917,11 @@ class MainWindow(QMainWindow):
         self.experiment_status_label.setObjectName("Muted")
         experiment_layout.addWidget(self.experiment_status_label)
         controls_layout.addWidget(self.experiment_group)
+        self.experiment_group.setVisible(SHOW_AB_EXPERIMENT_UI)
         controls_layout.setAlignment(Qt.AlignmentFlag.AlignTop)
         controls_scroll.setWidget(controls)
+        controls_scroll.setMinimumWidth(330)
+        controls_scroll.setMaximumWidth(420)
         controls_scroll.setSizePolicy(QSizePolicy.Policy.Preferred, QSizePolicy.Policy.Maximum)
         body.addWidget(controls_scroll, 3, Qt.AlignmentFlag.AlignTop)
         outer.addLayout(body)
@@ -1522,6 +2025,7 @@ class MainWindow(QMainWindow):
                 self.selected_overlay_fields(),
                 str(self.overlay_anchor_combo.currentData()),
                 self.overlay_size_spin.value(),
+                self.language,
             )
 
     def overlay_enabled_changed(self, enabled: bool) -> None:
@@ -1529,6 +2033,26 @@ class MainWindow(QMainWindow):
         self.settings.sync()
         self._sync_overlay_process()
         self._send_overlay_settings()
+
+    def steamvr_autostart_changed(self, enabled: bool) -> None:
+        self.settings.setValue("startup/steamvr_autostart", bool(enabled))
+        self.settings.sync()
+
+    def _autostart_steamvr_if_enabled(self) -> None:
+        autostart_suppressed = os.environ.get(
+            "FRAMEPILOT_SUPPRESS_STEAMVR_AUTOSTART",
+            "",
+        ).strip().lower() in {"1", "true", "yes", "on"}
+        if autostart_suppressed or not self.steamvr_autostart_check.isChecked():
+            return
+        state, detail = request_steamvr_start()
+        if state == "already_running":
+            self.append_event("info", self.tr("SteamVR 已在运行，已跳过自动启动"))
+        elif state == "requested":
+            self.append_event("success", self.tr("已请求 Steam 启动 SteamVR"))
+        else:
+            prefix = self.tr("无法自动启动 SteamVR")
+            self.append_event("error", f"{prefix}: {detail}")
 
     def collection_enabled_changed(self, enabled: bool) -> None:
         self.settings.setValue("collection/enabled", bool(enabled))
@@ -1548,8 +2072,50 @@ class MainWindow(QMainWindow):
         if not enabled:
             self._auto_upload_retry_timer.stop()
             return
-        self._auto_upload_last_attempted_records = 0
         QTimer.singleShot(0, self._maybe_auto_upload)
+
+    def _persist_auto_upload_state(self) -> None:
+        values = {
+            "auto_upload_last_success_records": self._auto_upload_last_success_records,
+            "auto_upload_last_attempt_at": self._auto_upload_last_attempt_at,
+            "auto_upload_next_allowed_at": self._auto_upload_next_allowed_at,
+            "upload_rate_limited_until": self._upload_rate_limited_until,
+            "auto_upload_failure_count": self._auto_upload_failure_count,
+        }
+        for key, value in values.items():
+            self.settings.setValue(f"collection/{key}", value)
+        self.settings.sync()
+
+    def _upload_cooldown_remaining(self) -> int:
+        return max(
+            0,
+            math.ceil(self._upload_rate_limited_until - time.time()),
+        )
+
+    def _refresh_collection_upload_button(self) -> None:
+        if self._collection_uploading:
+            self.collection_upload_button.setText(self.tr("正在上传…"))
+            self.collection_upload_button.setEnabled(False)
+            return
+        remaining = self._upload_cooldown_remaining()
+        if remaining > 0:
+            minutes = max(1, math.ceil(remaining / 60))
+            self.collection_upload_button.setText(
+                self.trf("{minutes} 分钟后重试", minutes=minutes)
+            )
+            self.collection_upload_button.setEnabled(False)
+            return
+        self.collection_upload_button.setText(self.tr("上传共享数据"))
+        self.collection_upload_button.setEnabled(
+            int(self.last_collection_status.get("records", 0)) > 0
+        )
+
+    def _schedule_auto_upload(self, wake_at: float) -> None:
+        if wake_at <= 0.0 or not self.collection_auto_upload_check.isChecked():
+            return
+        delay_ms = max(1_000, math.ceil((wake_at - time.time()) * 1000))
+        self._auto_upload_retry_timer.start(min(delay_ms, 2_147_000_000))
+        self._refresh_collection_upload_button()
 
     def update_collection_status(self, data: dict) -> None:
         self.last_collection_status = dict(data)
@@ -1559,24 +2125,21 @@ class MainWindow(QMainWindow):
         steady = int(data.get("steady_records", 0))
         transitions = int(data.get("transition_records", 0))
         size_kib = float(data.get("storage_bytes", 0)) / 1024.0
-        if self.language == "en":
-            prefix = "Collecting" if enabled else "Paused"
-            text = (
-                f"{prefix} · {worlds}/30 worlds · {contexts} world/population contexts\n"
-                f"{steady} steady windows · {transitions} population transitions · {size_kib:.1f} KiB"
-            )
-        else:
-            prefix = "采集中" if enabled else "已暂停"
-            text = (
-                f"{prefix} · 世界 {worlds}/30 · 世界/人数场景 {contexts}\n"
-                f"稳定窗口 {steady} · 人数变化 {transitions} · {size_kib:.1f} KiB"
-            )
+        prefix = self.tr("采集中" if enabled else "已暂停")
+        text = self.trf(
+            "{prefix} · 世界 {worlds}/30 · 世界/人数场景 {contexts}\n"
+            "稳定窗口 {steady} · 人数变化 {transitions} · {size_kib:.1f} KiB",
+            prefix=prefix,
+            worlds=worlds,
+            contexts=contexts,
+            steady=steady,
+            transitions=transitions,
+            size_kib=size_kib,
+        )
         self.collection_status_label.setText(text)
         has_records = int(data.get("records", 0)) > 0
         self.collection_export_button.setEnabled(has_records)
-        self.collection_upload_button.setEnabled(
-            has_records and not self._collection_uploading
-        )
+        self._refresh_collection_upload_button()
         records_path = str(data.get("records_path", ""))
         self.collection_status_label.setToolTip(records_path)
         self._maybe_auto_upload()
@@ -1591,19 +2154,33 @@ class MainWindow(QMainWindow):
         records = int(self.last_collection_status.get("records", 0))
         if records <= 0:
             return
-        if not force and records <= self._auto_upload_last_attempted_records:
-            return
-        self._auto_upload_last_attempted_records = max(
-            self._auto_upload_last_attempted_records, records
+        if records < self._auto_upload_last_success_records:
+            self._auto_upload_last_success_records = 0
+            self._persist_auto_upload_state()
+        now = time.time()
+        next_allowed = max(
+            self._auto_upload_next_allowed_at,
+            self._upload_rate_limited_until,
         )
+        due, wake_at = auto_upload_due(
+            records,
+            self._auto_upload_last_success_records,
+            now,
+            self._auto_upload_last_attempt_at,
+            next_allowed,
+            force=force,
+        )
+        if not due:
+            self._schedule_auto_upload(wake_at)
+            return
         self._begin_collection_upload(automatic=True)
 
     def export_collection(self) -> None:
         path_text, _ = QFileDialog.getSaveFileName(
             self,
-            "Export sharing data" if self.language == "en" else "导出匿名共享数据",
+            self.tr("导出匿名共享数据"),
             str(Path.home() / "framepilot-vr-shared-data.zip"),
-            "ZIP archive (*.zip)" if self.language == "en" else "ZIP 压缩包 (*.zip)",
+            self.tr("ZIP 压缩包 (*.zip)"),
         )
         if not path_text:
             return
@@ -1620,44 +2197,46 @@ class MainWindow(QMainWindow):
         if not bool(data.get("ok", False)):
             QMessageBox.warning(
                 self,
-                "Export failed" if self.language == "en" else "导出失败",
+                self.tr("导出失败"),
                 str(data.get("error", "Unknown error")),
             )
             return
         path = str(data.get("path", ""))
-        self.append_event("success", f"匿名共享数据已导出: {path}")
+        self.append_event("success", f"{self.tr('匿名共享数据已导出')}: {path}")
         QMessageBox.information(
             self,
-            "Export complete" if self.language == "en" else "导出完成",
-            (
-                f"Upload-ready archive saved to:\n{path}\n\nNo player identity, instance ID, machine name, or hardware fingerprint is included."
-                if self.language == "en"
-                else f"可供后期上传的压缩包已保存到：\n{path}\n\n其中不包含玩家身份、实例 ID、机器名或硬件指纹。"
+            self.tr("导出完成"),
+            self.trf(
+                "可供后期上传的压缩包已保存到：\n{path}\n\n"
+                "其中不包含玩家身份、实例 ID、机器名或硬件指纹。",
+                path=path,
             ),
         )
 
     def upload_collection(self) -> None:
         if self._collection_uploading:
             return
-        if self.language == "en":
-            title = "Upload sharing data"
-            message = (
-                "Upload all new local records to the FramePilot sharing service?\n\n"
-                "Included: world ID, population ranges and changes, GPU/HMD model, "
-                "GPU VRAM, CPU model and core/thread counts, system RAM, render "
-                "settings, and aggregated performance metrics.\n\n"
-                "Excluded: player identity, VRChat instance ID, machine name, and "
-                "hardware fingerprint. Uploading happens only after this confirmation."
+        remaining = self._upload_cooldown_remaining()
+        if remaining > 0:
+            minutes = max(1, math.ceil(remaining / 60))
+            QMessageBox.information(
+                self,
+                self.tr("上传暂缓"),
+                self.trf(
+                    "服务器要求暂缓上传，请在约 {minutes} 分钟后重试。"
+                    "本地记录仍安全保留，没有被删除。",
+                    minutes=minutes,
+                ),
             )
-        else:
-            title = "上传共享数据"
-            message = (
-                "是否把尚未上传的本地记录发送到 FramePilot 共享服务？\n\n"
-                "包含：世界 ID、人数区间与变化、GPU/HMD 型号、GPU 显存、"
-                "CPU 型号与核心/线程数、系统内存、渲染设置和聚合性能指标。\n\n"
-                "不包含：玩家身份、VRChat 实例 ID、机器名或硬件指纹。"
-                "只有本次确认后才会上传。"
-            )
+            return
+        title = self.tr("上传共享数据")
+        message = self.tr(
+            "是否把尚未上传的本地记录发送到 FramePilot 共享服务？\n\n"
+            "包含：世界 ID、人数区间与变化、GPU/HMD 型号、GPU 显存、"
+            "CPU 型号与核心/线程数、系统内存、渲染设置和聚合性能指标。\n\n"
+            "不包含：玩家身份、VRChat 实例 ID、机器名或硬件指纹。"
+            "只有本次确认后才会上传。"
+        )
         answer = QMessageBox.question(
             self,
             title,
@@ -1674,13 +2253,21 @@ class MainWindow(QMainWindow):
             return
         self._collection_uploading = True
         self._collection_upload_is_automatic = automatic
-        self.collection_upload_button.setEnabled(False)
-        self.collection_upload_button.setText(
-            "Uploading…" if self.language == "en" else "正在上传…"
-        )
+        if automatic:
+            now = time.time()
+            self._auto_upload_last_attempt_at = now
+            self._auto_upload_next_allowed_at = (
+                now + AUTO_UPLOAD_MIN_INTERVAL_SECONDS
+            )
+            self._persist_auto_upload_state()
+        self._refresh_collection_upload_button()
         self.append_event(
             "info",
-            "开始自动上传新增匿名记录" if automatic else "开始上传匿名共享数据",
+            self.tr(
+                "开始自动上传新增匿名记录"
+                if automatic
+                else "开始上传匿名共享数据"
+            ),
         )
         self.worker.submit_collection_upload(automatic=automatic)
 
@@ -1690,21 +2277,35 @@ class MainWindow(QMainWindow):
         )
         self._collection_uploading = False
         self._collection_upload_is_automatic = False
-        self.collection_upload_button.setText(self.tr("上传共享数据"))
-        self.collection_upload_button.setEnabled(
-            int(self.last_collection_status.get("records", 0)) > 0
-        )
         if not bool(data.get("ok", False)):
             error = str(data.get("error", "Unknown error"))
-            self.append_event("error", f"匿名共享数据上传失败: {error}")
+            status = int(data.get("http_status", 0))
+            retry_after = int(data.get("retry_after_seconds", 0))
+            self._auto_upload_failure_count += 1
+            fallback = min(
+                AUTO_UPLOAD_MAX_BACKOFF_SECONDS,
+                AUTO_UPLOAD_MIN_INTERVAL_SECONDS
+                * (2 ** min(3, self._auto_upload_failure_count - 1)),
+            )
+            wait_seconds = retry_after if retry_after > 0 else fallback
+            now = time.time()
+            self._auto_upload_next_allowed_at = now + wait_seconds
+            if status == 429:
+                self._upload_rate_limited_until = now + wait_seconds
+            self._persist_auto_upload_state()
+            minutes = max(1, math.ceil(wait_seconds / 60))
+            friendly = self.trf(
+                "上传暂时受限，本地记录仍安全保留；约 {minutes} 分钟后重试。",
+                minutes=minutes,
+            )
+            self.append_event("warning", friendly)
+            self._schedule_auto_upload(self._auto_upload_next_allowed_at)
             if automatic:
-                if self.collection_auto_upload_check.isChecked():
-                    self._auto_upload_retry_timer.start()
                 return
             QMessageBox.warning(
                 self,
-                "Upload failed" if self.language == "en" else "上传失败",
-                error,
+                self.tr("上传失败"),
+                f"{friendly}\n\n{error}",
             )
             return
         batches = int(data.get("batches", 0))
@@ -1712,38 +2313,39 @@ class MainWindow(QMainWindow):
         duplicates = int(data.get("duplicate_records", 0))
         has_more = bool(data.get("has_more", False))
         self._auto_upload_retry_timer.stop()
+        now = time.time()
+        records = int(self.last_collection_status.get("records", 0))
+        self._auto_upload_last_success_records = (
+            max(0, records - 1) if has_more else records
+        )
+        self._auto_upload_last_attempt_at = now
+        self._auto_upload_next_allowed_at = (
+            now + AUTO_UPLOAD_MIN_INTERVAL_SECONDS
+        )
+        self._upload_rate_limited_until = 0.0
+        self._auto_upload_failure_count = 0
+        self._persist_auto_upload_state()
+        self._refresh_collection_upload_button()
         if batches == 0:
-            detail = (
-                "No new records need uploading."
-                if self.language == "en"
-                else "没有需要上传的新记录。"
-            )
-        elif self.language == "en":
-            detail = (
-                f"Upload complete: {accepted} accepted, {duplicates} duplicate "
-                f"record(s), across {batches} batch(es)."
-            )
+            detail = self.tr("没有需要上传的新记录。")
         else:
-            detail = (
-                f"上传完成：服务器接收 {accepted} 条，重复 {duplicates} 条，"
-                f"共 {batches} 个批次。"
+            detail = self.trf(
+                "上传完成：服务器接收 {accepted} 条，重复 {duplicates} 条，"
+                "共 {batches} 个批次。",
+                accepted=accepted,
+                duplicates=duplicates,
+                batches=batches,
             )
         if has_more:
-            detail += (
-                "\nSome records remain; click Upload again to continue."
-                if self.language == "en"
-                else "\n仍有记录未上传，请再次点击“上传共享数据”继续。"
-            )
+            detail += self.tr("\n仍有记录未上传，请再次点击“上传共享数据”继续。")
         self.append_event("success", detail.replace("\n", " "))
         if automatic:
             if has_more and self.collection_auto_upload_check.isChecked():
-                QTimer.singleShot(
-                    1000, lambda: self._maybe_auto_upload(force=True)
-                )
+                self._schedule_auto_upload(self._auto_upload_next_allowed_at)
             return
         QMessageBox.information(
             self,
-            "Upload complete" if self.language == "en" else "上传完成",
+            self.tr("上传完成"),
             detail,
         )
 
@@ -1757,7 +2359,7 @@ class MainWindow(QMainWindow):
             "error": "错误",
         }
         self.overlay_state = state
-        text = labels.get(state, state)
+        text = self.tr(labels.get(state, state))
         if detail and state == "error":
             text += f" · {detail}"
         self.overlay_status_label.setText(text)
@@ -1904,88 +2506,33 @@ class MainWindow(QMainWindow):
         if not force:
             value = self.settings.value("onboarding/completed", False)
             completed = value if isinstance(value, bool) else str(value).strip().lower() in {"1", "true", "yes", "on"}
-            if completed:
+            try:
+                revision = int(self.settings.value("onboarding/revision", 0))
+            except (TypeError, ValueError):
+                revision = 0
+            if completed and revision >= ONBOARDING_REVISION:
                 return
         self.onboarding_dialog = OnboardingDialog(self)
         self.onboarding_dialog.finished.connect(lambda _result: setattr(self, "onboarding_dialog", None))
         self.onboarding_dialog.open()
 
     def tr(self, chinese: str) -> str:
-        return ZH_EN.get(chinese, chinese) if self.language == "en" else chinese
+        return LOCALIZER.translate(chinese, self.language)
+
+    def trf(self, chinese: str, **values: object) -> str:
+        return LOCALIZER.format(chinese, self.language, **values)
 
     def localize_message(self, message: str) -> str:
-        if self.language != "en":
-            return message
-        exact = {
-            "当前设置低于配置下限": "Current setting is below the configured minimum",
-            "当前设置高于配置上限": "Current setting is above the configured maximum",
-            "GPU/交付压力高，但已到分辨率下限": "GPU/delivery pressure is high, but resolution is already at minimum",
-            "GPU 帧时间或重投影超过安全阈值": "GPU frame time or reprojection exceeded the safety threshold",
-            "CPU 受限；降低分辨率通常无效": "CPU-bound; lowering resolution is usually ineffective",
-            "性能余量充足，但已到分辨率上限": "Performance headroom is available, but resolution is already at maximum",
-            "处于滞回区间": "Within the hysteresis band",
-            "系统 GPU 已接近满载；保留余量并禁止升档": "System GPU is near saturation; preserving headroom and blocking resolution increases",
-            "当前没有 VR 场景应用，等待游戏提交画面": "No VR scene application; waiting for the game to submit frames",
-            "尚未取得帧时序；等待场景应用提交画面": "No frame timings yet; waiting for the scene application",
-            "控制参数已更新": "Control parameters updated",
-            "SteamVR 未运行，面板将自动重连": "SteamVR is not running; the panel will reconnect automatically",
-            "等待 SteamVR": "Waiting for SteamVR",
-            "SteamVR 已连接": "SteamVR connected",
-            "连接已断开": "Disconnected",
-            "校准期间场景应用发生变化，已取消": "Scene application changed during calibration; calibration cancelled",
-            "写入锁尚未解锁": "Setting writes are still locked",
-            "当前没有场景应用": "No current scene application",
-            "没有可恢复的启动值": "No startup value is available to restore",
-        }
-        if message in exact:
-            return exact[message]
-        replacements = (
-            ("性能余量已稳定", "Performance headroom stable for"),
-            ("性能余量观察中", "Observing performance headroom"),
-            ("已连接 SteamVR", "Connected to SteamVR"),
-            ("推荐目标", "recommended target"),
-            ("硬件配置", "Hardware profile"),
-            ("场景应用", "Scene application"),
-            ("显式设置", "explicit setting"),
-            ("默认值", "default"),
-            ("检测到外部设置变化", "External setting change detected"),
-            ("控制参数已更新", "Control parameters updated"),
-            ("开始精确阶梯校准", "Started precise stepped calibration"),
-            ("开始只读校准", "Started read-only calibration"),
-            ("个阶段", "stages"),
-            ("校准完成", "Calibration complete"),
-            ("建议", "recommended"),
-            ("检测为 CPU 受限", "CPU-bound detected"),
-            ("校准失败", "Calibration failed"),
-            ("校准阶段切换到", "Calibration stage changed to"),
-            ("取消校准时恢复失败", "Failed to restore while cancelling calibration"),
-            ("无法开始校准", "Unable to start calibration"),
-            ("阶段", "Stage"),
-            ("日志已创建", "Log created"),
-            ("SteamVR 采样失败", "SteamVR sampling failed"),
-            ("已恢复", "restored to"),
-            ("恢复", "Restore"),
-            ("失败", "failed"),
-            ("手动应用", "manual apply"),
-            ("自动应用", "Automatically applied"),
-            ("截图已保存", "Screenshot saved"),
-            ("便携策略已导出", "Portable policy exported"),
-            ("已导入便携策略", "Portable policy imported"),
-            ("读取本机校准失败", "Failed to read local calibration"),
-            ("秒", "s"),
-        )
-        output = message
-        for source, target in replacements:
-            output = output.replace(source, target)
-        return output
+        return LOCALIZER.localize_message(message, self.language)
 
     def language_changed(self) -> None:
         language = str(self.language_combo.currentData())
-        if language not in {"zh", "en"} or language == self.language:
+        if language not in SUPPORTED_LANGUAGES or language == self.language:
             return
         self.language = language
         self.settings.setValue("language", language)
         self.retranslate_ui(announce=True)
+        self._send_overlay_settings()
 
     def set_advanced_mode(self, enabled: bool, persist: bool = True) -> None:
         self.advanced_mode = bool(enabled)
@@ -2003,7 +2550,9 @@ class MainWindow(QMainWindow):
         self.range_group.setVisible(self.advanced_mode)
         self.manual_group.setVisible(self.advanced_mode)
         self.overlay_advanced.setVisible(self.advanced_mode)
-        self.experiment_group.setVisible(self.advanced_mode)
+        self.experiment_group.setVisible(
+            SHOW_AB_EXPERIMENT_UI and self.advanced_mode
+        )
         self.save_config_button.setVisible(False)
         if persist:
             self.settings.setValue("advanced_mode", self.advanced_mode)
@@ -2031,7 +2580,7 @@ class MainWindow(QMainWindow):
         for index in range(self.target_fps_combo.count()):
             divisor = int(self.target_fps_combo.itemData(index))
             if divisor == 0:
-                prefix = "Legacy custom" if self.language == "en" else "旧策略自定义"
+                prefix = self.tr("旧策略自定义")
                 text = f"{prefix} · {self.legacy_target_fps:g} FPS"
             else:
                 text = self.tr(names[divisor])
@@ -2041,8 +2590,7 @@ class MainWindow(QMainWindow):
 
     def retranslate_ui(self, announce: bool = False) -> None:
         def translated(current: str) -> str:
-            chinese = EN_ZH.get(current, current)
-            return ZH_EN.get(chinese, chinese) if self.language == "en" else chinese
+            return LOCALIZER.translate(current, self.language)
 
         for widget_type in (QLabel, QPushButton, QCheckBox):
             for widget in self.findChildren(widget_type):
@@ -2055,23 +2603,48 @@ class MainWindow(QMainWindow):
         mode_names = {"monitor": "只读监控", "one_step": "单步自动调整", "continuous": "连续自适应"}
         for index in range(self.mode_combo.count()):
             self.mode_combo.setItemText(index, self.tr(mode_names[str(self.mode_combo.itemData(index))]))
+        anchor_names = {
+            "upper_left": "左上",
+            "upper_right": "右上",
+            "lower_left": "左下",
+            "lower_right": "右下",
+        }
+        for index in range(self.overlay_anchor_combo.count()):
+            anchor = str(self.overlay_anchor_combo.itemData(index))
+            self.overlay_anchor_combo.setItemText(index, self.tr(anchor_names[anchor]))
+        self.steamvr_autostart_check.setToolTip(
+            self.tr("保存此选项；从下次启动 FramePilot VR 起生效。")
+        )
+        self.arm_check.setToolTip(
+            self.tr(
+                "未勾选时只监控和推荐，不会写入 SteamVR。"
+                "勾选后，单步、连续和手动操作可修改当前游戏的 resolutionScale；此选择会保存到本机。"
+            )
+        )
         self._refresh_target_labels()
         if hasattr(self, "show_action"):
             self.show_action.setText(self.tr("显示面板"))
             self.exit_action.setText(self.tr("退出"))
+        if self.onboarding_dialog is not None:
+            self.onboarding_dialog.retranslate_ui()
         self.chart.language = self.language
         self.chart.update()
         if self.last_snapshot:
             self.update_snapshot(self.last_snapshot)
         if self.last_collection_status:
             self.update_collection_status(self.last_collection_status)
+        self._update_write_status_banner()
         self.update_connection(*self.connection_state)
         if announce:
-            message = "Language switched to English" if self.language == "en" else "语言已切换为中文"
+            message = f"{self.tr('语言已切换')} · {self.language_combo.currentText()}"
             self.append_event("info", message)
 
     def _restore_cached_config(self) -> None:
+        self.arm_check.blockSignals(True)
+        self.arm_check.setChecked(cached_write_permission(self.settings))
+        self.arm_check.blockSignals(False)
         if not self.settings.contains("runtime/mode"):
+            self.settings.sync()
             return
 
         def number(key: str, default: float, converter):
@@ -2079,12 +2652,6 @@ class MainWindow(QMainWindow):
                 return converter(float(self.settings.value(key, default)))
             except (TypeError, ValueError):
                 return converter(default)
-
-        def boolean(key: str, default: bool) -> bool:
-            value = self.settings.value(key, default)
-            if isinstance(value, bool):
-                return value
-            return str(value).strip().lower() in {"1", "true", "yes", "on"}
 
         self._loading_controls = True
         try:
@@ -2130,18 +2697,16 @@ class MainWindow(QMainWindow):
             if mode_index >= 0:
                 self.mode_combo.setCurrentIndex(mode_index)
 
-            self.arm_check.blockSignals(True)
-            self.arm_check.setChecked(boolean("runtime/armed", False))
-            self.arm_check.blockSignals(False)
         finally:
             self._loading_controls = False
+        self.settings.sync()
+        self._update_write_status_banner()
 
     def _cache_config(self, config: RuntimeConfig) -> None:
         values = {
             "scheduler_revision": 1,
             "preset": str(self.preset_combo.currentData()),
             "mode": config.mode,
-            "armed": config.armed,
             "target_divisor": config.target_divisor,
             "target_fps": config.target_fps,
             "min_scale": config.min_scale,
@@ -2158,6 +2723,7 @@ class MainWindow(QMainWindow):
             "up_observation_seconds": config.up_observation_seconds,
             "up_rollback_cooldown_seconds": config.up_rollback_cooldown_seconds,
             "up_gpu_limit_pct": config.up_gpu_limit_pct,
+            "armed": config.armed,
         }
         for key, value in values.items():
             self.settings.setValue(f"runtime/{key}", value)
@@ -2219,6 +2785,7 @@ class MainWindow(QMainWindow):
             return
         self.worker.submit_config(config)
         self.manual_apply.setEnabled(config.armed)
+        self._update_write_status_banner(config)
         if self._skip_next_cache:
             self._skip_next_cache = False
         else:
@@ -2239,9 +2806,9 @@ class MainWindow(QMainWindow):
             return
         path_text, _ = QFileDialog.getSaveFileName(
             self,
-            "Export portable policy" if self.language == "en" else "导出便携策略",
+            self.tr("导出便携策略"),
             str(Path.home() / "steamvr-adaptive-policy.json"),
-            "JSON policy (*.json)" if self.language == "en" else "JSON 策略 (*.json)",
+            self.tr("JSON 策略 (*.json)"),
         )
         if not path_text:
             return
@@ -2253,22 +2820,18 @@ class MainWindow(QMainWindow):
             self.append_event("success", f"便携策略已导出: {path}")
             QMessageBox.information(
                 self,
-                "Export complete" if self.language == "en" else "导出完成",
-                (
-                    "Thresholds, steps, and timing windows were exported. The hardware fingerprint and local final resolution were excluded."
-                    if self.language == "en"
-                    else "已导出阈值、步长和时间窗口。硬件指纹与本机最终分辨率未被导出。"
-                ),
+                self.tr("导出完成"),
+                self.tr("已导出阈值、步长和时间窗口。硬件指纹与本机最终分辨率未被导出。"),
             )
         except Exception as exc:
-            QMessageBox.warning(self, "Export failed" if self.language == "en" else "导出失败", str(exc))
+            QMessageBox.warning(self, self.tr("导出失败"), str(exc))
 
     def import_policy(self) -> None:
         path_text, _ = QFileDialog.getOpenFileName(
             self,
-            "Import portable policy" if self.language == "en" else "导入便携策略",
+            self.tr("导入便携策略"),
             str(Path.home()),
-            "JSON policy (*.json)" if self.language == "en" else "JSON 策略 (*.json)",
+            self.tr("JSON 策略 (*.json)"),
         )
         if not path_text:
             return
@@ -2299,43 +2862,33 @@ class MainWindow(QMainWindow):
             self.mode_combo.setCurrentIndex(0)
             self.apply_config()
             self.calibration_status.setText(
-                "Policy imported in read-only mode; run local calibration before adopting a resolution range"
-                if self.language == "en"
-                else "策略已迁移；当前保持只读，请在本机运行校准后采用分辨率范围"
+                self.tr("策略已迁移；当前保持只读，请在本机运行校准后采用分辨率范围")
             )
             self.append_event("success", f"已导入便携策略: {path_text}")
         except Exception as exc:
             self._loading_controls = False
-            QMessageBox.warning(self, "Import failed" if self.language == "en" else "导入失败", str(exc))
+            QMessageBox.warning(self, self.tr("导入失败"), str(exc))
 
     def start_calibration(self, precise: bool) -> None:
         if not self.last_snapshot:
             QMessageBox.information(
                 self,
-                "Waiting for data" if self.language == "en" else "等待数据",
-                "Enter a VR game and wait for stable frame timings first."
-                if self.language == "en"
-                else "需要先进入 VR 游戏并取得稳定帧时序。",
+                self.tr("等待数据"),
+                self.tr("需要先进入 VR 游戏并取得稳定帧时序。"),
             )
             return
         if precise:
             if not self.arm_check.isChecked():
                 QMessageBox.information(
                     self,
-                    "Writes locked" if self.language == "en" else "写入锁定",
-                    "Unlock SteamVR setting writes before precise stepped calibration."
-                    if self.language == "en"
-                    else "精确阶梯校准需要先解锁 SteamVR 设置写入。",
+                    self.tr("写入锁定"),
+                    self.tr("精确阶梯校准需要先允许 FramePilot VR 调控 SteamVR 分辨率。"),
                 )
                 return
             answer = QMessageBox.warning(
                 self,
-                "Start precise stepped calibration" if self.language == "en" else "开始精确阶梯校准",
-                (
-                    "Calibration briefly tests the current value, -10%, and +10%, then restores the original value. Keep the same representative scene."
-                    if self.language == "en"
-                    else "校准会短暂测试当前值、-10% 和 +10%，结束后自动恢复原值。请保持在同一代表性场景。"
-                ),
+                self.tr("开始精确阶梯校准"),
+                self.tr("校准会短暂测试当前值、-10% 和 +10%，结束后自动恢复原值。请保持在同一代表性场景。"),
                 QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
             )
@@ -2346,9 +2899,7 @@ class MainWindow(QMainWindow):
         self.readonly_calibrate.setEnabled(False)
         self.precise_calibrate.setEnabled(False)
         self.calibration_status.setText(
-            "Calibrating; keep the game scene and view as stable as possible"
-            if self.language == "en"
-            else "正在校准；请保持游戏场景与视角尽量稳定"
+            self.tr("正在校准；请保持游戏场景与视角尽量稳定")
         )
 
     def update_hardware(self, data: dict) -> None:
@@ -2365,7 +2916,7 @@ class MainWindow(QMainWindow):
     def calibration_complete(self, data: dict) -> None:
         if "error" in data:
             self.calibration_progress.setValue(0)
-            prefix = "Calibration failed" if self.language == "en" else "校准失败"
+            prefix = self.tr("校准失败")
             self.calibration_status.setText(f"{prefix}: {self.localize_message(str(data['error']))}")
             self.readonly_calibrate.setEnabled(True)
             self.precise_calibrate.setEnabled(True)
@@ -2378,20 +2929,23 @@ class MainWindow(QMainWindow):
         self.manual_spin.setValue(recommended)
         self._select_custom_policy()
         self.apply_config()
-        if self.language == "en":
-            bound = " (CPU-bound; resolution was not proactively lowered)" if bool(data["cpu_bound"]) else ""
-            precision = "precise steps" if bool(data["precise"]) else "read-only estimate"
-            self.calibration_status.setText(
-                f"Scene calibration complete · {precision} · recommended {recommended}% · "
-                f"range {data['recommended_min']}–{data['recommended_max']}%{bound}"
+        bound = (
+            f" ({self.tr('CPU 受限，建议未主动降分辨率')})"
+            if bool(data["cpu_bound"])
+            else ""
+        )
+        precision = self.tr("精确阶梯" if bool(data["precise"]) else "只读估算")
+        self.calibration_status.setText(
+            self.trf(
+                "场景校准完成 · {precision} · 建议 {recommended}% · "
+                "范围 {minimum}–{maximum}%{bound}",
+                precision=precision,
+                recommended=recommended,
+                minimum=data["recommended_min"],
+                maximum=data["recommended_max"],
+                bound=bound,
             )
-        else:
-            bound = "（CPU 受限，建议未主动降分辨率）" if bool(data["cpu_bound"]) else ""
-            precision = "精确阶梯" if bool(data["precise"]) else "只读估算"
-            self.calibration_status.setText(
-                f"场景校准完成 · {precision} · 建议 {recommended}% · "
-                f"范围 {data['recommended_min']}–{data['recommended_max']}% {bound}"
-            )
+        )
         self.readonly_calibrate.setEnabled(True)
         self.precise_calibrate.setEnabled(True)
 
@@ -2399,11 +2953,10 @@ class MainWindow(QMainWindow):
         if state and not self._closing:
             result = QMessageBox.warning(
                 self,
-                "Unlock writes" if self.language == "en" else "解锁写入",
-                (
-                    "Once unlocked, one-step, continuous, and manual modes may change the current game's SteamVR resolutionScale.\n\nObserve in read-only mode first, then validate one step."
-                    if self.language == "en"
-                    else "解锁后，单步、连续和手动模式都可以修改当前游戏的 SteamVR resolutionScale。\n\n建议先使用只读模式观察，再进行单步验证。"
+                self.tr("允许修改分辨率"),
+                self.tr(
+                    "允许后，单步、连续和手动模式都可以修改当前游戏的 SteamVR resolutionScale。\n\n"
+                    "此选择会保存在本机，直到你主动取消。建议先使用只读模式观察，再进行单步验证。"
                 ),
                 QMessageBox.StandardButton.Ok | QMessageBox.StandardButton.Cancel,
                 QMessageBox.StandardButton.Cancel,
@@ -2413,13 +2966,45 @@ class MainWindow(QMainWindow):
                 self.arm_check.setChecked(False)
                 self.arm_check.blockSignals(False)
         self.apply_config()
+        self._update_write_status_banner()
+
+    def _update_write_status_banner(
+        self,
+        config: RuntimeConfig | None = None,
+    ) -> None:
+        if not hasattr(self, "write_status_label"):
+            return
+        if config is None:
+            try:
+                config = self.config_from_ui()
+            except (AttributeError, TypeError, ValueError):
+                config = RuntimeConfig()
+        if not config.armed:
+            text = self.tr("只读监控 · 不会修改 SteamVR")
+            colors = ("#0F2B25", "#6FE0B1", "#245E50")
+        elif config.mode == "continuous":
+            text = self.tr("连续控制已启用 · 分辨率可能持续变化")
+            colors = ("#3A171C", "#FF9AAA", "#7A303B")
+        else:
+            text = self.tr("已允许写入 · 单步和手动操作可能修改分辨率")
+            colors = ("#382B12", "#F2C36B", "#725923")
+        background, foreground, border = colors
+        self.write_status_label.setText(text)
+        self.write_status_label.setStyleSheet(
+            f"background:{background};color:{foreground};border:1px solid {border};"
+            "border-radius:7px;padding:8px;font-weight:650;"
+        )
 
     def start_experiment(self, variant: str) -> None:
         if not self.last_snapshot:
             QMessageBox.information(self, "等待 VRChat", "请先进入稳定的 VRChat 场景并取得帧时序。")
             return
         if not self.arm_check.isChecked():
-            QMessageBox.information(self, "写入锁定", "A/B 测试会主动修改分辨率，请先解锁 SteamVR 设置写入。")
+            QMessageBox.information(
+                self,
+                "写入锁定",
+                "A/B 测试会主动修改分辨率，请先允许 FramePilot VR 调控 SteamVR 分辨率。",
+            )
             return
         start_scale = 100 if variant == "A" else 150
         answer = QMessageBox.warning(
@@ -2475,21 +3060,19 @@ class MainWindow(QMainWindow):
         if not self.arm_check.isChecked():
             QMessageBox.information(
                 self,
-                "Writes locked" if self.language == "en" else "写入锁定",
-                "Enable “Unlock SteamVR setting writes” first."
-                if self.language == "en"
-                else "请先勾选“解锁 SteamVR 设置写入”。",
+                self.tr("写入锁定"),
+                self.tr("请先勾选“允许 FramePilot VR 调控 SteamVR 分辨率”。"),
             )
             return
         current = self.last_snapshot.get("resolution_scale", "—")
         target = self.manual_spin.value()
         answer = QMessageBox.question(
             self,
-            "Apply resolution" if self.language == "en" else "应用分辨率",
-            (
-                f"Change the current scene application from {current}% to {target}%?"
-                if self.language == "en"
-                else f"将当前场景应用从 {current}% 调整为 {target}%？"
+            self.tr("应用分辨率"),
+            self.trf(
+                "将当前场景应用从 {current}% 调整为 {target}%？",
+                current=current,
+                target=target,
             ),
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             QMessageBox.StandardButton.No,
@@ -2526,35 +3109,52 @@ class MainWindow(QMainWindow):
         equivalent_height = round(render_height * dimension_ratio)
 
         self.app_label.setText(app_key)
-        budget_text = "Frame budget" if self.language == "en" else "帧预算"
-        system_cpu_text = "System CPU" if self.language == "en" else "系统 CPU"
-        recommend_text = "Recommended" if self.language == "en" else "建议"
-        writes_text = "writes" if self.language == "en" else "写入"
-        times_text = "" if self.language == "en" else " 次"
         self._refresh_target_labels(refresh)
         target_divisor = int(data.get("target_divisor", self.target_fps_combo.currentData()))
-        if self.language == "en":
-            cadence = "native" if target_divisor == 1 else f"1/{target_divisor}" if target_divisor > 1 else "legacy"
-            target_text = f"target {cadence} ({target_fps:g} FPS)"
-        else:
-            cadence = "原生" if target_divisor == 1 else f"1/{target_divisor}" if target_divisor > 1 else "旧策略"
-            target_text = f"目标 {cadence} ({target_fps:g} FPS)"
-        self.gpu_card.set_values(f"{gpu:.2f} ms", f"{budget_text} {budget:.2f} ms · {gpu / budget * 100:.0f}%")
-        self.cpu_card.set_values(f"{cpu:.2f} ms", f"{system_cpu_text} {sys_cpu:.0f}%")
+        cadence = (
+            self.tr("原生")
+            if target_divisor == 1
+            else f"1/{target_divisor}"
+            if target_divisor > 1
+            else self.tr("旧策略")
+        )
+        target_text = self.trf("目标 {cadence} ({fps:g} FPS)", cadence=cadence, fps=target_fps)
+        self.gpu_card.set_values(
+            f"{gpu:.2f} ms",
+            self.trf(
+                "帧预算 {budget:.2f} ms · {ratio:.0f}%",
+                budget=budget,
+                ratio=gpu / budget * 100,
+            ),
+        )
+        self.cpu_card.set_values(
+            f"{cpu:.2f} ms",
+            self.trf("系统 CPU {value:.0f}%", value=sys_cpu),
+        )
         self.util_card.set_values("n/a" if sys_gpu is None else f"{float(sys_gpu):.0f}%", "NVIDIA GPU")
         arrow = "=" if proposed == scale else "→"
         self.scale_card.set_values(
             f"{equivalent_width}×{equivalent_height}",
-            f"SteamVR {scale}% · {recommend_text} {arrow} {proposed}%",
+            self.trf(
+                "SteamVR {scale}% · 建议 {arrow} {proposed}%",
+                scale=scale,
+                arrow=arrow,
+                proposed=proposed,
+            ),
         )
-        base_text = "base" if self.language == "en" else "基准"
-        self.hmd_label.setText(
-            f"{refresh:.0f} Hz · {target_text} · {base_text} {render_width}×{render_height} · "
-            f"{writes_text} {int(data['write_count'])}{times_text}"
+        hmd_text = self.trf(
+            "{refresh:.0f} Hz · {target} · 基准 {width}×{height} · 写入 {count} 次",
+            refresh=refresh,
+            target=target_text,
+            width=render_width,
+            height=render_height,
+            count=int(data["write_count"]),
         )
-        current_recommendation = "Current recommendation" if self.language == "en" else "当前建议"
+        self.hmd_label.setText(hmd_text)
+        self.hmd_label.setToolTip(hmd_text)
         self.decision_label.setText(
-            f"{self.localize_message(str(data['reason']))}\n{current_recommendation}: {proposed}%"
+            f"{self.localize_message(str(data['reason']))}\n"
+            f"{self.trf('当前建议：{proposed}%', proposed=proposed)}"
         )
         if not self.manual_spin.hasFocus():
             self.manual_spin.setValue(scale)
@@ -2622,6 +3222,11 @@ def make_double_spin(minimum: float, maximum: float, value: float, suffix: str) 
 
 
 def make_icon() -> QIcon:
+    icon_path = resource_path("assets", "framepilot-vr-icon.png")
+    if icon_path.is_file():
+        icon = QIcon(str(icon_path))
+        if not icon.isNull():
+            return icon
     pixmap = QPixmap(64, 64)
     pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
@@ -2643,7 +3248,11 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overlay-status-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--screenshot", type=Path)
     parser.add_argument("--auto-close", type=float, default=0.0)
-    parser.add_argument("--language", choices=("zh", "en"), help="临时覆盖界面语言")
+    parser.add_argument(
+        "--language",
+        choices=tuple(code for code, _label in LANGUAGE_OPTIONS),
+        help="临时覆盖界面语言",
+    )
     parser.add_argument("--target-divisor", type=int, choices=(1, 2, 3, 4), help="临时设置头显刷新率分频")
     parser.add_argument("--target-fps", type=float, help="高级兼容项：临时设置绝对 FPS 预算")
     return parser.parse_args()

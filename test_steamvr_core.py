@@ -1,9 +1,20 @@
 from __future__ import annotations
 
+import json
+from pathlib import Path
+import tempfile
 import unittest
 from unittest.mock import patch
 
-from steamvr_core import AdaptiveRuntime, FrameSample, RuntimeConfig, SteamVRSession
+from steamvr_core import (
+    AdaptiveController,
+    AdaptiveRuntime,
+    FrameSample,
+    RuntimeConfig,
+    SteamVRSession,
+    WindowStats,
+)
+from vrc_context import VrcResolutionProfileStore
 
 
 class _GpuSampler:
@@ -149,6 +160,85 @@ class DashboardVisibilityTests(unittest.TestCase):
         self.assertIs(session.dashboard_visible(), True)
         session.overlay = Overlay(RuntimeError("OpenVR read failed"))
         self.assertIsNone(session.dashboard_visible())
+
+
+class RecoveryPolicyTests(unittest.TestCase):
+    def test_quest_style_mispresented_does_not_block_recovery(self) -> None:
+        controller = AdaptiveController()
+        config = RuntimeConfig(
+            min_scale=20,
+            max_scale=150,
+            step_up=5,
+            raise_stable_seconds=12.0,
+            target_divisor=4,
+        )
+        stats = WindowStats(
+            frames=68,
+            gpu_p50_ms=20.0,
+            gpu_p95_ms=28.0,
+            cpu_p95_ms=16.0,
+            interval_p95_ms=30.0,
+            reprojection_pct=0.0,
+            dropped=0,
+            mispresented=190,
+        )
+
+        observing = controller.decide(stats, 1000.0 / 22.5, 71, 0.0, config)
+        recovered = controller.decide(stats, 1000.0 / 22.5, 71, 12.1, config)
+
+        self.assertEqual(observing.action, "hold")
+        self.assertEqual(recovered.action, "up")
+        self.assertEqual(recovered.proposed_scale, 76)
+
+    def test_predicted_recovery_is_capped_by_step_up(self) -> None:
+        controller = AdaptiveController()
+        config = RuntimeConfig(
+            min_scale=20,
+            max_scale=200,
+            step_up=5,
+            raise_stable_seconds=0.0,
+            target_divisor=4,
+        )
+        stats = WindowStats(68, 10.0, 12.0, 8.0, 30.0, 0.0, 0, 0)
+
+        decision = controller.decide(stats, 1000.0 / 22.5, 20, 1.0, config)
+
+        self.assertEqual(decision.action, "up")
+        self.assertEqual(decision.proposed_scale, 25)
+
+    def test_v1_profile_quarantines_unsafe_evidence(self) -> None:
+        with tempfile.TemporaryDirectory(prefix="framepilot-profile-test-") as temporary:
+            path = Path(temporary) / "profiles.json"
+            path.write_text(
+                json.dumps(
+                    {
+                        "schema_version": 1,
+                        "profiles": {
+                            "hardware": {
+                                "world|1-5|d4": {
+                                    "safe_scale": 80,
+                                    "safe_evidence": 12,
+                                    "unsafe_scale": 20,
+                                    "pressure_samples": 400,
+                                }
+                            }
+                        },
+                    }
+                ),
+                encoding="utf-8",
+            )
+
+            store = VrcResolutionProfileStore(path)
+            profile = store.get("hardware", "world", "1-5", "d4")
+
+            self.assertEqual(store.data["schema_version"], 2)
+            self.assertIsNotNone(profile)
+            assert profile is not None
+            self.assertEqual(profile["safe_scale"], 80)
+            self.assertEqual(profile["unsafe_scale"], 0)
+            self.assertEqual(profile["pressure_samples"], 0)
+            self.assertEqual(profile["legacy_v1_unsafe_scale"], 20)
+            self.assertEqual(profile["legacy_v1_pressure_samples"], 400)
 
 
 if __name__ == "__main__":
