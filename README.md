@@ -1,8 +1,39 @@
-# FramePilot VR v0.12
+# FramePilot VR
 
-这是一个 Windows / SteamVR 动态分辨率控制面板。它读取 OpenVR 帧时序、系统 CPU 与 NVIDIA GPU 占用率，按当前头显刷新率计算帧预算，并为当前场景应用建议或调整 `resolutionScale`。桌面面板与 CLI 工具共用 `steamvr_core.py`，控制逻辑和写入保护一致。
+<p align="center">
+  <a href="https://passhu.booth.pm/items/8654010">
+    <img src="booth-materials/FramePilotVR-BOOTH-JA-v0.12.0/01_images/00_booth_product_cover_1200.png" alt="FramePilot VR — SteamVR dynamic resolution controller" width="760">
+  </a>
+</p>
+
+<p align="center">
+  <a href="https://passhu.booth.pm/items/8654010"><strong>BOOTH 发布页</strong></a>
+  ·
+  <a href="https://framepilot-world-bench.passhu.chatgpt.site"><strong>FramePilot World Bench</strong></a>
+  ·
+  <a href="START_HERE.html"><strong>快速开始</strong></a>
+  ·
+  <a href="LICENSE"><strong>MIT License</strong></a>
+</p>
+
+FramePilot VR 是一个面向 Windows / SteamVR 的开源动态分辨率控制面板。它读取 OpenVR 帧时序、系统 CPU 与 NVIDIA GPU 占用率，按当前头显刷新率计算帧预算，并为当前场景建议或调整 `resolutionScale`。桌面面板与 CLI 工具共用 `steamvr_core.py`，控制逻辑和写入保护一致。
+
+FramePilot VR is an open-source dynamic-resolution controller for Windows and SteamVR. It monitors OpenVR frame timing and system load, then recommends or applies per-application SteamVR resolution changes while keeping write access explicit and recoverable.
 
 VRChat 地图负载观测榜：[FramePilot World Bench](https://framepilot-world-bench.passhu.chatgpt.site)。当前是单设备数据的早期预览，只用于观察方向。
+
+## 获取与安装
+
+- 普通用户：从 [BOOTH 发布页](https://passhu.booth.pm/items/8654010) 获取完整 Windows ZIP。
+- 下载后完整解压 ZIP，先阅读 `START_HERE.html`，再运行 `start_panel.bat` 或 `FramePilotVR.exe`。
+- 开发者可克隆仓库并使用 Python 3.11+ 运行源码：
+
+```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .
+python steamvr_adaptive_gui.py
+```
 
 > 发给其他人时请发送完整 ZIP，并让收件人先打开 `START_HERE.html`。必须完整解压，不能只复制 EXE，也不要直接在压缩包内运行。
 >
@@ -135,3 +166,7 @@ SteamVR 接受 `resolutionScale` 写入，不代表每款游戏都一定会立�
 ## 已完成的本机验证
 
 已在 SteamVR、PICO 4S、90 Hz 和 VRChat `steam.app.438100` 上验证 OpenVR 连接、帧时序读取、按应用设置读取与可恢复写入，并完成连续三天实际使用验证。VRChat 当前测试基线为 40%；构建与面板截图测试保持只读，不改变该值。
+
+## License
+
+FramePilot VR is released under the [MIT License](LICENSE).
