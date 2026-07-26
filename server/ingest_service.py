@@ -14,6 +14,7 @@ import sqlite3
 import tempfile
 import threading
 import time
+import traceback
 from typing import BinaryIO
 from urllib.parse import urlsplit
 import zipfile
@@ -846,7 +847,20 @@ class Handler(BaseHTTPRequestHandler):
                 HTTPStatus.BAD_REQUEST,
                 {"ok": False, "error": "invalid_batch", "detail": str(exc)},
             )
-        except Exception:
+        except Exception as exc:
+            print(
+                json.dumps(
+                    {
+                        "time": int(time.time()),
+                        "event": "upload_failed",
+                        "error_type": type(exc).__name__,
+                        "error": str(exc),
+                        "traceback": traceback.format_exc(),
+                    },
+                    separators=(",", ":"),
+                ),
+                flush=True,
+            )
             self.send_json(
                 HTTPStatus.INTERNAL_SERVER_ERROR,
                 {"ok": False, "error": "internal_error"},
