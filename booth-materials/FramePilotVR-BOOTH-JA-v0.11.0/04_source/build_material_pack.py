@@ -169,6 +169,55 @@ def safe_app_capture(path: Path) -> Image.Image:
     return image.crop((0, 0, image.width, safe_bottom))
 
 
+def localize_world_bench_japanese(website: Image.Image) -> Image.Image:
+    """Keep the live page structure/data while replacing visible Chinese promo copy."""
+    localized = website.convert("RGBA")
+    draw = ImageDraw.Draw(localized)
+
+    # Replace the original hero copy with a Japanese editorial overlay.
+    draw.rounded_rectangle(
+        (14, 150, 845, 545),
+        radius=24,
+        fill=(4, 8, 16, 238),
+        outline=(33, 54, 74, 230),
+        width=2,
+    )
+    draw.text((30, 198), "VRCHAT  ·  PCVR  ·  COMMUNITY TELEMETRY", font=font(15, weight=600), fill=MINT)
+    draw.text(
+        (28, 248),
+        "ワールド負荷を、\nみんなのデータで。",
+        font=font(58, weight=650),
+        fill=INK,
+        spacing=2,
+    )
+    draw.text(
+        (32, 430),
+        "実プレイから得た FramePilot の匿名集計。\nまずは負荷傾向を、データで確認。",
+        font=font(22),
+        fill="#C8D5E2",
+        spacing=7,
+    )
+
+    # Replace the top-right preview badge.
+    draw.rounded_rectangle((1090, 18, 1247, 71), radius=26, fill=(19, 21, 34, 245), outline="#4A4568", width=2)
+    draw.ellipse((1111, 39, 1121, 49), fill=ORANGE)
+    draw.text((1131, 31), "プレビュー", font=font(18), fill=INK)
+
+    # Keep the live numbers, but localize their labels and snapshot caption.
+    labels = [
+        ((1105, 241, 1238, 287), "収録ワールド"),
+        ((1090, 330, 1238, 376), "テレメトリ記録"),
+        ((1090, 418, 1238, 464), "提供デバイス"),
+    ]
+    for box, text in labels:
+        draw.rounded_rectangle(box, radius=8, fill=(12, 13, 25, 246))
+        bbox = draw.textbbox((0, 0), text, font=font(14))
+        draw.text((box[2] - (bbox[2] - bbox[0]) - 10, box[1] + 12), text, font=font(14), fill=MUTED)
+    draw.rounded_rectangle((949, 493, 1238, 536), radius=8, fill=(12, 13, 25, 246))
+    draw.text((963, 506), "データスナップショット  ·  2026-07-26", font=font(14), fill=MUTED)
+    return localized.convert("RGB")
+
+
 def render_osd_japanese(path: Path) -> Image.Image:
     sys.path.insert(0, str(ROOT))
     from PySide6.QtGui import QGuiApplication
@@ -589,6 +638,7 @@ def main() -> int:
     app_en = safe_app_capture(ROOT / "screenshots" / "framepilot-v0.11.0-en-marketing.png")
     app_de = safe_app_capture(ROOT / "screenshots" / "framepilot-v0.11.0-de-marketing.png")
     website = Image.open(ROOT / "screenshots" / "world-bench-live.png").convert("RGB")
+    website_ja = localize_world_bench_japanese(website)
     vr_bg = Image.open(args.vr_background).convert("RGB")
     osd = render_osd_japanese(CAPTURES / "osd-ja-actual-render.png")
 
@@ -596,20 +646,21 @@ def main() -> int:
     app_en.save(CAPTURES / "app-en-safe-crop.png")
     app_de.save(CAPTURES / "app-de-safe-crop.png")
     website.save(CAPTURES / "world-bench-live.png")
+    website_ja.save(CAPTURES / "world-bench-ja-composite.png")
     shutil.copy2(args.vr_background, CAPTURES / "imagegen-vr-background.png")
 
     squares = [
         save_square_cover(icon, app_ja),
         save_square_osd(icon, osd, vr_bg),
         save_square_auto(icon, app_ja),
-        save_square_telemetry(icon, website),
+        save_square_telemetry(icon, website_ja),
         save_square_fullframe(icon, app_ja),
         save_square_languages(icon, app_ja, app_en, app_de),
     ]
     create_contact_sheet(squares, IMAGES / "preview_contact_sheet.png")
 
     languages_square = Image.open(IMAGES / "05_multilanguage_square_1200.png").convert("RGB")
-    slides = save_video_slides(icon, app_ja, website, osd, vr_bg, languages_square)
+    slides = save_video_slides(icon, app_ja, website_ja, osd, vr_bg, languages_square)
     if not args.skip_video:
         build_video(slides, VIDEO / "FramePilotVR_PV_JA_1080p.mp4")
     write_manifest()
