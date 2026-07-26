@@ -1,6 +1,8 @@
-# FramePilot VR v0.9
+# FramePilot VR v0.10
 
 这是一个 Windows / SteamVR 动态分辨率控制面板。它读取 OpenVR 帧时序、系统 CPU 与 NVIDIA GPU 占用率，按当前头显刷新率计算帧预算，并为当前场景应用建议或调整 `resolutionScale`。桌面面板与 CLI 工具共用 `steamvr_core.py`，控制逻辑和写入保护一致。
+
+VRChat 地图负载观测榜：[FramePilot World Bench](https://framepilot-world-bench.passhu.chatgpt.site)。当前是单设备数据的早期预览，只用于观察方向。
 
 > 发给其他人时请发送完整 ZIP，并让收件人先打开 `START_HERE.html`。必须完整解压，不能只复制 EXE，也不要直接在压缩包内运行。
 >
