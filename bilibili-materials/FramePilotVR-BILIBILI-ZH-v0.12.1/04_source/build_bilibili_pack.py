@@ -261,56 +261,33 @@ def footer(draw: ImageDraw.ImageDraw, text: str = "Windows · SteamVR · 简体�
 
 def save_cover(
     background: Image.Image,
-    app_capture: Image.Image,
+    _app_capture: Image.Image,
     icon: Image.Image,
     size: tuple[int, int],
     filename: str,
 ) -> Path:
     width, height = size
-    canvas = new_canvas(background, size, veil=92)
+    canvas = new_canvas(background, size, veil=118)
     draw = ImageDraw.Draw(canvas)
-    scale = width / 1920
+    wide = width / height > 1.5
+    brand_size = 70 if wide else 64
+    brand_x = 74 if wide else 68
+    brand_y = 58 if wide else 54
+    mark = fit_contain(icon.convert("RGBA"), (brand_size, brand_size))
+    canvas.alpha_composite(mark, (brand_x, brand_y))
+    draw.text(
+        (brand_x + brand_size + 22, brand_y + 7),
+        "FramePilot VR",
+        font=font(38 if wide else 34, bold=True),
+        fill=INK,
+    )
 
-    def s(value: int) -> int:
-        return round(value * scale)
-
-    mark = fit_contain(icon.convert("RGBA"), (s(70), s(70)))
-    canvas.alpha_composite(mark, (s(72), s(58)))
-    draw.text((s(160), s(63)), "FramePilot VR", font=font(s(38), bold=True), fill=INK)
-    pill(draw, (width - s(330), s(62)), "30 秒看懂", size=s(23))
-
-    if width / height > 1.5:
-        draw.text((s(76), s(238)), "VR 掉帧？", font=font(s(92), bold=True), fill=INK)
-        draw.text((s(76), s(356)), "让分辨率自己调", font=font(s(72), bold=True), fill=MINT)
-        draw.text(
-            (s(81), s(468)),
-            "看懂 GPU 帧预算，再决定画质该升还是该降",
-            font=font(s(27)),
-            fill="#D8E3EF",
-        )
-        rounded_paste(canvas, app_capture, (s(900), s(220), s(1848), s(867)), radius=s(28))
-        pill(draw, (s(82), s(585)), "默认只读", size=s(22))
-        pill(
-            draw,
-            (s(82), s(657)),
-            "授权才写入",
-            size=s(22),
-            color=CYAN,
-            fill="#101F32",
-            outline="#356895",
-        )
-        draw.text((s(82), height - s(92)), "STEAMVR 动态分辨率控制器", font=font(s(23), bold=True), fill=MUTED)
+    if wide:
+        draw.text((72, 236), "VR 掉帧？", font=font(190, bold=True), fill=INK)
+        draw.text((72, 490), "让分辨率自己调", font=font(150, bold=True), fill=MINT)
     else:
-        draw.text((s(76), s(206)), "VR 掉帧？", font=font(s(80), bold=True), fill=INK)
-        draw.text((s(76), s(310)), "让分辨率自己调", font=font(s(63), bold=True), fill=MINT)
-        draw.text(
-            (s(81), s(410)),
-            "看懂帧预算，再决定画质升降",
-            font=font(s(25)),
-            fill="#D8E3EF",
-        )
-        rounded_paste(canvas, app_capture, (s(75), s(525), width - s(75), height - s(120)), radius=s(26))
-        pill(draw, (s(82), height - s(165)), "默认只读 · 授权才写入", size=s(20))
+        draw.text((66, 250), "VR 掉帧？", font=font(170, bold=True), fill=INK)
+        draw.text((66, 480), "让分辨率自己调", font=font(140, bold=True), fill=MINT)
 
     out = IMAGES / filename
     canvas.convert("RGB").save(out, quality=95, optimize=True)
