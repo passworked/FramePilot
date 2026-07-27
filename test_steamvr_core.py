@@ -1,15 +1,18 @@
 from __future__ import annotations
 
+from dataclasses import replace
 import json
 from pathlib import Path
 import tempfile
 import unittest
 from unittest.mock import patch
 
+from framepilot_i18n import LocalizedMessage
 from steamvr_core import (
     AdaptiveController,
     AdaptiveRuntime,
     FrameSample,
+    HardwareContext,
     RuntimeConfig,
     SteamVRSession,
     WindowStats,
@@ -160,6 +163,41 @@ class DashboardVisibilityTests(unittest.TestCase):
         self.assertIs(session.dashboard_visible(), True)
         session.overlay = Overlay(RuntimeError("OpenVR read failed"))
         self.assertIsNone(session.dashboard_visible())
+
+
+class StructuredLocalizationEventTests(unittest.TestCase):
+    def test_target_frame_rate_change_uses_semantic_event_key(self) -> None:
+        runtime = AdaptiveRuntime(
+            RuntimeConfig(
+                mode="continuous",
+                armed=True,
+                target_divisor=1,
+            )
+        )
+        runtime.hardware_context = HardwareContext(
+            "test",
+            "machine",
+            "gpu",
+            "maker",
+            "hmd",
+            72.0,
+            2000,
+            2000,
+        )
+
+        runtime.update_config(
+            replace(runtime.config, target_divisor=2)
+        )
+
+        events = runtime.drain_events()
+        self.assertEqual(len(events), 1)
+        level, message = events[0]
+        self.assertEqual(level, "info")
+        self.assertIsInstance(message, LocalizedMessage)
+        assert isinstance(message, LocalizedMessage)
+        self.assertEqual(message.key, "event.target_fps_lowered")
+        self.assertEqual(message.values["old_fps"], 72.0)
+        self.assertEqual(message.values["new_fps"], 36.0)
 
 
 class RecoveryPolicyTests(unittest.TestCase):

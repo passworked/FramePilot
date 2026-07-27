@@ -21,6 +21,7 @@ from dataclasses import dataclass, replace
 import psutil
 import openvr
 
+from framepilot_i18n import LocalizedMessage
 from vrc_context import (
     PassiveVrcDataCollector,
     VrcContextSnapshot,
@@ -1066,7 +1067,7 @@ class AdaptiveRuntime:
         self.pending_target_raise: dict[str, float | None] | None = None
         self.one_step_written = False
         self.original_scales: dict[str, int] = {}
-        self.events: deque[tuple[str, str]] = deque(maxlen=256)
+        self.events: deque[tuple[str, str | LocalizedMessage]] = deque(maxlen=256)
         self._waiting_reported = False
         self.hardware_context: HardwareContext | None = None
         local_root = Path(os.environ.get("LOCALAPPDATA", str(Path.home()))) / "SteamVRAdaptiveResolution"
@@ -1078,10 +1079,10 @@ class AdaptiveRuntime:
         self.vrc_profile_applied_key = ""
         psutil.cpu_percent(interval=None)
 
-    def emit(self, level: str, message: str) -> None:
+    def emit(self, level: str, message: str | LocalizedMessage) -> None:
         self.events.append((level, message))
 
-    def drain_events(self) -> list[tuple[str, str]]:
+    def drain_events(self) -> list[tuple[str, str | LocalizedMessage]]:
         output = list(self.events)
         self.events.clear()
         return output
@@ -1115,7 +1116,13 @@ class AdaptiveRuntime:
                 }
                 self.emit(
                     "info",
-                    f"目标帧率降低 {old_target_fps:g} → {new_target_fps:g} FPS；等待实际节拍稳定后预测升档",
+                    LocalizedMessage(
+                        "event.target_fps_lowered",
+                        {
+                            "old_fps": old_target_fps,
+                            "new_fps": new_target_fps,
+                        },
+                    ),
                 )
             elif new_target_fps > old_target_fps + 0.1:
                 self.pending_target_raise = None

@@ -7,6 +7,7 @@ from pathlib import Path
 import sys
 import time
 
+from framepilot_i18n import Localizer
 from steamvr_core import (
     APP_NAME,
     AdaptiveRuntime,
@@ -20,6 +21,7 @@ from steamvr_core import (
 
 
 ensure_utf8_console()
+LOCALIZER = Localizer()
 
 
 def parser() -> argparse.ArgumentParser:
@@ -138,7 +140,8 @@ def main() -> int:
         while args.duration <= 0 or time.monotonic() - started < args.duration:
             snapshot = runtime.poll()
             for level, message in runtime.drain_events():
-                print(f"{level.upper()}: {message}", flush=True)
+                localized = LOCALIZER.localize_message(message, "zh")
+                print(f"{level.upper()}: {localized}", flush=True)
             if snapshot is not None:
                 data = snapshot.as_dict()
                 if writer is None:
