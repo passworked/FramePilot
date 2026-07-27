@@ -257,5 +257,7 @@
   "系统 CPU {value:.0f}%": "システム CPU {value:.0f}%",
   "SteamVR {scale}% · 建议 {arrow} {proposed}%": "SteamVR {scale}% · 推奨 {arrow} {proposed}%",
   "{refresh:.0f} Hz · {target} · 基准 {width}×{height} · 写入 {count} 次": "{refresh:.0f} Hz · {target} · ベースライン {width}×{height} · {count} 回書き込み",
-  "当前建议：{proposed}%": "現在の推奨: {proposed}%"
+  "当前建议：{proposed}%": "現在の推奨: {proposed}%",
+  "目标帧率降低": "目標フレームレートを引き下げ",
+  "；等待实际节拍稳定后预测升档": "。実際のフレーム周期が安定してから解像度の引き上げを予測"
 }

@@ -257,5 +257,7 @@
   "共享数据正在上传": "Freigegebene Daten werden hochgeladen",
   "VR 参数叠加层已启动；SteamVR 未运行时会自动等待": "VR-Parameter-Overlay gestartet; wartet automatisch, wenn SteamVR nicht ausgeführt wird",
   "VR 叠加层异常退出，代码": "VR-Overlay wird abnormal beendet, Code",
-  "VR 叠加层启动失败": "Der Start des VR-Overlays schlägt fehl"
+  "VR 叠加层启动失败": "Der Start des VR-Overlays schlägt fehl",
+  "目标帧率降低": "Zielbildrate gesenkt",
+  "；等待实际节拍稳定后预测升档": "; Warten auf eine stabile tatsächliche Bildrate, bevor eine Auflösungserhöhung berechnet wird"
 }

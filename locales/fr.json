@@ -257,5 +257,7 @@
   "共享数据正在上传": "Les données partagées sont en cours de téléchargement",
   "VR 参数叠加层已启动；SteamVR 未运行时会自动等待": "La superposition des paramètres VR a démarré ; attendra automatiquement lorsque SteamVR ne fonctionne pas",
   "VR 叠加层异常退出，代码": "La superposition VR se ferme anormalement, code",
-  "VR 叠加层启动失败": "Le lancement de la superposition VR échoue"
+  "VR 叠加层启动失败": "Le lancement de la superposition VR échoue",
+  "目标帧率降低": "Fréquence d’images cible réduite",
+  "；等待实际节拍稳定后预测升档": " ; attente de la stabilisation de la cadence réelle avant de prévoir une hausse de résolution"
 }

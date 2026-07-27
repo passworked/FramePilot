@@ -257,5 +257,7 @@
   "系统 CPU {value:.0f}%": "시스템 CPU {value:.0f}%",
   "SteamVR {scale}% · 建议 {arrow} {proposed}%": "SteamVR {scale}% · 권장 {arrow} {proposed}%",
   "{refresh:.0f} Hz · {target} · 基准 {width}×{height} · 写入 {count} 次": "{refresh:.0f}Hz · {target} · 기준선 {width}×{height} · {count} 번 쓰기",
-  "当前建议：{proposed}%": "현재 제안: {proposed}%"
+  "当前建议：{proposed}%": "현재 제안: {proposed}%",
+  "目标帧率降低": "목표 프레임 레이트 감소",
+  "；等待实际节拍稳定后预测升档": ". 실제 프레임 주기가 안정되면 해상도 상향을 예측"
 }

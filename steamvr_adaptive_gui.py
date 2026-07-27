@@ -59,7 +59,7 @@ from steamvr_core import (
 )
 
 
-APP_VERSION = "0.12.1"
+APP_VERSION = "0.13.2"
 STEAMVR_LAUNCH_URI = "steam://rungameid/250820"
 TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
 ONBOARDING_REVISION = 5
@@ -410,6 +410,8 @@ ZH_EN = {
     "系统 CPU": "System CPU",
     "写入": "writes",
     "当前建议": "Current recommendation",
+    "目标帧率降低": "Target frame rate lowered",
+    "；等待实际节拍稳定后预测升档": "; waiting for the actual frame cadence to stabilize before predicting a resolution increase",
     "语言已切换": "Language switched",
     "SteamVR 已在运行，已跳过自动启动": "SteamVR is already running; automatic startup was skipped",
     "已请求 Steam 启动 SteamVR": "Requested Steam to start SteamVR",

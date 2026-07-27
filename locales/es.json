@@ -257,5 +257,7 @@
   "系统 CPU {value:.0f}%": "CPU del sistema {value:.0f}%",
   "SteamVR {scale}% · 建议 {arrow} {proposed}%": "SteamVR {scale}% · Sugerido {arrow} {proposed}%",
   "{refresh:.0f} Hz · {target} · 基准 {width}×{height} · 写入 {count} 次": "{refresh:.0f} Hz · {target} · Línea base {width}×{height} · Escribir {count} veces",
-  "当前建议：{proposed}%": "Sugerencia actual: {proposed}%"
+  "当前建议：{proposed}%": "Sugerencia actual: {proposed}%",
+  "目标帧率降低": "Tasa de fotogramas objetivo reducida",
+  "；等待实际节拍稳定后预测升档": "; esperando que se estabilice la cadencia real antes de predecir un aumento de resolución"
 }

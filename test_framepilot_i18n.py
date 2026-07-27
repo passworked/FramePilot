@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
+import re
 import string
 import unittest
 
@@ -72,6 +73,24 @@ class LocalizationCatalogTests(unittest.TestCase):
         localizer = Localizer(ZH_EN, ROOT / "locales")
 
         self.assertEqual(localizer.translate("unregistered", "fr"), "unregistered")
+
+    def test_target_frame_rate_change_event_has_no_chinese_residue(self) -> None:
+        localizer = Localizer(ZH_EN, ROOT / "locales")
+        message = (
+            "目标帧率降低 72 → 36 FPS；"
+            "等待实际节拍稳定后预测升档"
+        )
+
+        for language, _label in LANGUAGE_OPTIONS:
+            if language == "zh":
+                continue
+            with self.subTest(language=language):
+                translated = localizer.localize_message(message, language)
+                self.assertNotIn("目标帧率降低", translated)
+                self.assertNotIn("等待实际节拍稳定后预测升档", translated)
+                self.assertNotIn("；", translated)
+                if language != "ja":
+                    self.assertIsNone(re.search(r"[\u3400-\u9fff]", translated))
 
 
 if __name__ == "__main__":
