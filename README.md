@@ -52,7 +52,7 @@ python steamvr_adaptive_gui.py
 - 当前游戏、GPU/CPU P95 帧时间、系统 CPU/GPU 占用率和趋势图。
 - 支持简体中文、English、日本語、한국어、Français、Deutsch、Español 七种界面语言；选择会保存，下次启动自动沿用。
 - Guide 最后一步提供 SteamVR 分辨率控制授权，默认不勾选；用户手动勾选后会缓存该选择。
-- 可保存的 SteamVR 自启选项；启用后，FramePilot VR 下次启动时会通过 Steam 请求启动 SteamVR。
+- 可保存的 SteamVR 启动项；启用后，SteamVR 下次启动时会自动启动 FramePilot VR，FramePilot 不会反向拉起 SteamVR。
 - 可选择原生刷新率或刷新率的 1/2、1/3、1/4 作为动态分辨率帧预算目标。
 - 保守、平衡、激进三套控制预设。
 - 本地世界经验：重新进入见过的 VRChat 世界时，可按相同硬件、帧率目标和人数档直接建议或应用已验证分辨率；缺少精确人数档时使用相邻档插值或保守的人数偏移。

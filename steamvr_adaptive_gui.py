@@ -14,7 +14,6 @@ import sys
 import threading
 import time
 from collections import deque
-from collections.abc import Callable
 
 from PySide6.QtCore import QObject, QPointF, QProcess, QRectF, QSettings, Qt, QThread, QTimer, Signal
 from PySide6.QtGui import QAction, QColor, QFont, QIcon, QLinearGradient, QPainter, QPen, QPixmap
@@ -62,11 +61,11 @@ from steamvr_core import (
     calculate_calibration,
     executable_dir,
     process_running,
+    write_steamvr_application_manifest,
 )
 
 
-APP_VERSION = "0.14.0"
-STEAMVR_LAUNCH_URI = "steam://rungameid/250820"
+APP_VERSION = "0.14.1"
 TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
 ONBOARDING_REVISION = 5
 ONBOARDING_PAGE_BUILDERS = (
@@ -123,22 +122,25 @@ def setting_number(settings: QSettings, key: str, default: float = 0.0) -> float
         return float(default)
 
 
-def request_steamvr_start(
-    process_checker: Callable[[str], bool] = process_running,
-    url_opener: Callable[[str], object] | None = None,
-) -> tuple[str, str]:
-    """Request SteamVR startup through Steam without assuming an install path."""
-    if process_checker("vrserver.exe"):
-        return "already_running", ""
-    if url_opener is None:
-        url_opener = getattr(os, "startfile", None)
-    if url_opener is None:
-        return "unsupported", "Steam URL launching is unavailable on this platform"
-    try:
-        url_opener(STEAMVR_LAUNCH_URI)
-    except OSError as exc:
-        return "failed", str(exc)
-    return "requested", ""
+def launch_with_steamvr_setting(settings: QSettings) -> bool:
+    """Migrate the old reversed startup checkbox to the corrected behavior."""
+    key = "startup/launch_with_steamvr"
+    if settings.contains(key):
+        return setting_bool(settings, key, False)
+    legacy = setting_bool(settings, "startup/steamvr_autostart", False)
+    settings.setValue(key, legacy)
+    settings.setValue("startup/steamvr_autostart", False)
+    settings.sync()
+    return legacy
+
+
+def steamvr_launch_command() -> tuple[Path, str]:
+    if getattr(sys, "frozen", False):
+        return Path(sys.executable).resolve(), "--started-by-steamvr"
+    script = Path(__file__).resolve()
+    return Path(sys.executable).resolve(), (
+        f'"{script}" --started-by-steamvr'
+    )
 
 
 def auto_upload_due(
@@ -750,13 +752,22 @@ class MonitorWorker(QObject):
     collection_uploaded = Signal(dict)
     finished = Signal()
 
-    def __init__(self, log_dir: Path, collection_enabled: bool = True) -> None:
+    def __init__(
+        self,
+        log_dir: Path,
+        collection_enabled: bool = True,
+        launch_with_steamvr: bool = False,
+    ) -> None:
         super().__init__()
         self.log_dir = log_dir
         self.commands: queue.Queue[tuple[str, object]] = queue.Queue()
         self.stop_event = threading.Event()
         self.runtime: AdaptiveRuntime | None = None
         local_root = Path(os.environ.get("LOCALAPPDATA", str(executable_dir()))) / "SteamVRAdaptiveResolution"
+        self.steamvr_manifest_path = local_root / "framepilot-vr.vrmanifest"
+        self.launch_with_steamvr = bool(launch_with_steamvr)
+        self._steamvr_autolaunch_synced = False
+        self._steamvr_autolaunch_last_attempt = -1e9
         self.strategy_store = StrategyStore(local_root / "strategy-store.json")
         self.passive_collector = PassiveVrcDataCollector(
             local_root / "shared-telemetry", enabled=collection_enabled
@@ -783,6 +794,9 @@ class MonitorWorker(QObject):
 
     def submit_restore(self) -> None:
         self.commands.put(("restore", None))
+
+    def submit_launch_with_steamvr(self, enabled: bool) -> None:
+        self.commands.put(("launch_with_steamvr", bool(enabled)))
 
     def submit_forget_vrc_profiles(self, world_id: str | None) -> None:
         self.commands.put(("forget_vrc_profiles", world_id))
@@ -854,6 +868,10 @@ class MonitorWorker(QObject):
                     self.runtime.manual_set_scale(int(payload))
                 elif command == "restore":
                     self.runtime.restore_current()
+                elif command == "launch_with_steamvr":
+                    self.launch_with_steamvr = bool(payload)
+                    self._steamvr_autolaunch_synced = False
+                    self._steamvr_autolaunch_last_attempt = -1e9
                 elif command == "forget_vrc_profiles":
                     self.runtime.forget_vrc_profiles(
                         str(payload) if payload else None
@@ -922,6 +940,48 @@ class MonitorWorker(QObject):
                             "automatic": bool(payload),
                         }
                     )
+
+    def _sync_steamvr_autolaunch(self, now: float) -> None:
+        assert self.runtime is not None
+        if (
+            self._steamvr_autolaunch_synced
+            or not self.runtime.connected
+            or now - self._steamvr_autolaunch_last_attempt < 30.0
+        ):
+            return
+        self._steamvr_autolaunch_last_attempt = now
+        try:
+            executable, arguments = steamvr_launch_command()
+            write_steamvr_application_manifest(
+                self.steamvr_manifest_path,
+                executable,
+                arguments,
+            )
+            actual = self.runtime.session.configure_application_autolaunch(
+                self.steamvr_manifest_path,
+                self.launch_with_steamvr,
+            )
+            if actual != self.launch_with_steamvr:
+                raise RuntimeError("SteamVR 返回的自动启动状态与请求不一致")
+            self._steamvr_autolaunch_synced = True
+            self.event.emit(
+                "success",
+                LocalizedMessage(
+                    (
+                        "event.framepilot_steamvr_autolaunch_enabled"
+                        if actual
+                        else "event.framepilot_steamvr_autolaunch_disabled"
+                    )
+                ),
+            )
+        except Exception as exc:
+            self.event.emit(
+                "error",
+                LocalizedMessage(
+                    "event.framepilot_steamvr_autolaunch_failed",
+                    {"detail": str(exc)},
+                ),
+            )
 
     def _run_collection_upload(self, automatic: bool) -> None:
         try:
@@ -1190,6 +1250,7 @@ class MonitorWorker(QObject):
             while not self.stop_event.is_set():
                 self._drain_commands()
                 if not process_running("vrserver.exe"):
+                    self._steamvr_autolaunch_synced = False
                     if last_connection_message != "waiting":
                         self.connection.emit(False, "等待 SteamVR")
                         self.event.emit("warning", "SteamVR 未运行，面板将自动重连")
@@ -1204,6 +1265,7 @@ class MonitorWorker(QObject):
                     for level, message in self.runtime.drain_events():
                         self.event.emit(level, message)
                     if self.runtime.connected:
+                        self._sync_steamvr_autolaunch(time.monotonic())
                         context = self.runtime.hardware()
                         if context.hardware_id != self._hardware_emitted:
                             self.hardware.emit(context.as_dict())
@@ -1240,6 +1302,7 @@ class MonitorWorker(QObject):
                     self.connection.emit(False, "连接已断开")
                     self.event.emit("error", f"SteamVR 采样失败: {exc}")
                     self.runtime.disconnect()
+                    self._steamvr_autolaunch_synced = False
                     last_connection_message = "error"
                     time.sleep(1.5)
                 time.sleep(0.2)
@@ -1355,7 +1418,6 @@ class MainWindow(QMainWindow):
         self._setup_tray()
         self._sync_overlay_process()
         self._send_overlay_settings()
-        QTimer.singleShot(0, self._autostart_steamvr_if_enabled)
         QTimer.singleShot(500, self.maybe_show_onboarding)
 
         if screenshot_path is not None:
@@ -1482,12 +1544,14 @@ class MainWindow(QMainWindow):
         target_hint.setWordWrap(True)
         target_hint.setObjectName("Muted")
         mode_layout.addWidget(target_hint)
-        self.steamvr_autostart_check = QCheckBox("启动 FramePilot VR 时自动启动 SteamVR")
+        self.steamvr_autostart_check = QCheckBox(
+            "SteamVR 启动时自动启动 FramePilot VR"
+        )
         self.steamvr_autostart_check.setChecked(
-            setting_bool(self.settings, "startup/steamvr_autostart", False)
+            launch_with_steamvr_setting(self.settings)
         )
         self.steamvr_autostart_check.setToolTip(
-            self.tr("保存此选项；从下次启动 FramePilot VR 起生效。")
+            self.tr("注册到 SteamVR 启动项；从下次启动 SteamVR 起生效。")
         )
         self.steamvr_autostart_check.toggled.connect(
             self.steamvr_autostart_changed
@@ -1766,7 +1830,9 @@ class MainWindow(QMainWindow):
     def _start_worker(self) -> None:
         self.thread = QThread(self)
         self.worker = MonitorWorker(
-            executable_dir() / "logs", self.collection_enabled_check.isChecked()
+            executable_dir() / "logs",
+            self.collection_enabled_check.isChecked(),
+            self.steamvr_autostart_check.isChecked(),
         )
         self.worker.moveToThread(self.thread)
         self.thread.started.connect(self.worker.run)
@@ -1853,24 +1919,10 @@ class MainWindow(QMainWindow):
         self._send_overlay_settings()
 
     def steamvr_autostart_changed(self, enabled: bool) -> None:
-        self.settings.setValue("startup/steamvr_autostart", bool(enabled))
+        self.settings.setValue("startup/launch_with_steamvr", bool(enabled))
         self.settings.sync()
-
-    def _autostart_steamvr_if_enabled(self) -> None:
-        autostart_suppressed = os.environ.get(
-            "FRAMEPILOT_SUPPRESS_STEAMVR_AUTOSTART",
-            "",
-        ).strip().lower() in {"1", "true", "yes", "on"}
-        if autostart_suppressed or not self.steamvr_autostart_check.isChecked():
-            return
-        state, detail = request_steamvr_start()
-        if state == "already_running":
-            self.append_event("info", self.tr("SteamVR 已在运行，已跳过自动启动"))
-        elif state == "requested":
-            self.append_event("success", self.tr("已请求 Steam 启动 SteamVR"))
-        else:
-            prefix = self.tr("无法自动启动 SteamVR")
-            self.append_event("error", f"{prefix}: {detail}")
+        if hasattr(self, "worker"):
+            self.worker.submit_launch_with_steamvr(enabled)
 
     def collection_enabled_changed(self, enabled: bool) -> None:
         self.settings.setValue("collection/enabled", bool(enabled))
@@ -2453,7 +2505,7 @@ class MainWindow(QMainWindow):
             anchor = str(self.overlay_anchor_combo.itemData(index))
             self.overlay_anchor_combo.setItemText(index, self.tr(anchor_names[anchor]))
         self.steamvr_autostart_check.setToolTip(
-            self.tr("保存此选项；从下次启动 FramePilot VR 起生效。")
+            self.tr("注册到 SteamVR 启动项；从下次启动 SteamVR 起生效。")
         )
         self.arm_check.setToolTip(
             self.tr(
@@ -3230,6 +3282,7 @@ def make_icon() -> QIcon:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="FramePilot VR desktop panel")
     parser.add_argument("--overlay-process", action="store_true", help=argparse.SUPPRESS)
+    parser.add_argument("--started-by-steamvr", action="store_true", help=argparse.SUPPRESS)
     parser.add_argument("--overlay-status-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--screenshot", type=Path)
     parser.add_argument("--auto-close", type=float, default=0.0)

@@ -14,8 +14,10 @@ from steamvr_core import (
     FrameSample,
     HardwareContext,
     RuntimeConfig,
+    STEAMVR_APPLICATION_KEY,
     SteamVRSession,
     WindowStats,
+    write_steamvr_application_manifest,
 )
 from vrc_context import (
     VrcContextSnapshot,
@@ -224,6 +226,79 @@ class StructuredLocalizationEventTests(unittest.TestCase):
         self.assertEqual(message.key, "event.target_fps_lowered")
         self.assertEqual(message.values["old_fps"], 72.0)
         self.assertEqual(message.values["new_fps"], 36.0)
+
+
+class SteamVRAutolaunchManifestTests(unittest.TestCase):
+    def test_manifest_registers_framepilot_as_dashboard_autolaunch_app(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="framepilot-manifest-test-"
+        ) as temporary:
+            root = Path(temporary)
+            executable = root / "FramePilotVR.exe"
+            manifest = root / "framepilot-vr.vrmanifest"
+
+            write_steamvr_application_manifest(
+                manifest,
+                executable,
+                "--started-by-steamvr",
+            )
+
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+            application = payload["applications"][0]
+            self.assertEqual(
+                application["app_key"],
+                STEAMVR_APPLICATION_KEY,
+            )
+            self.assertEqual(
+                application["binary_path_windows"],
+                str(executable.resolve()),
+            )
+            self.assertEqual(
+                application["arguments"],
+                "--started-by-steamvr",
+            )
+            self.assertTrue(application["is_dashboard_overlay"])
+
+    def test_session_sets_and_verifies_steamvr_autolaunch(self) -> None:
+        class Applications:
+            def __init__(self) -> None:
+                self.manifests: list[tuple[str, bool]] = []
+                self.enabled = False
+
+            def addApplicationManifest(
+                self,
+                path: str,
+                temporary: bool,
+            ) -> None:
+                self.manifests.append((path, temporary))
+
+            def setApplicationAutoLaunch(
+                self,
+                app_key: str,
+                enabled: bool,
+            ) -> None:
+                self.asserted_key = app_key
+                self.enabled = enabled
+
+            def getApplicationAutoLaunch(self, app_key: str) -> bool:
+                self.read_key = app_key
+                return self.enabled
+
+        applications = Applications()
+        session = SteamVRSession()
+        session.applications = applications
+
+        actual = session.configure_application_autolaunch(
+            Path("framepilot-vr.vrmanifest"),
+            True,
+        )
+
+        self.assertTrue(actual)
+        self.assertEqual(applications.asserted_key, STEAMVR_APPLICATION_KEY)
+        self.assertEqual(applications.read_key, STEAMVR_APPLICATION_KEY)
+        self.assertEqual(applications.manifests[0][1], False)
 
 
 class RecoveryPolicyTests(unittest.TestCase):

@@ -33,6 +33,7 @@ from vrc_context import (
 
 
 APP_NAME = "FramePilot VR"
+STEAMVR_APPLICATION_KEY = "io.framepilot.vr.desktop"
 RESOLUTION_KEY = "resolutionScale"
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 STRATEGY_SCHEMA_VERSION = 1
@@ -967,6 +968,26 @@ class SteamVRSession:
         except Exception:
             pass
 
+    def configure_application_autolaunch(
+        self,
+        manifest_path: Path,
+        enabled: bool,
+    ) -> bool:
+        assert self.applications is not None
+        self.applications.addApplicationManifest(
+            str(manifest_path.resolve()),
+            False,
+        )
+        self.applications.setApplicationAutoLaunch(
+            STEAMVR_APPLICATION_KEY,
+            bool(enabled),
+        )
+        return bool(
+            self.applications.getApplicationAutoLaunch(
+                STEAMVR_APPLICATION_KEY
+            )
+        )
+
     def scene_application(self) -> tuple[int, str]:
         assert self.applications is not None
         pid = int(self.applications.getCurrentSceneProcessId())
@@ -1075,6 +1096,43 @@ def executable_dir() -> Path:
     if getattr(sys, "frozen", False):
         return Path(sys.executable).resolve().parent
     return Path(__file__).resolve().parent
+
+
+def write_steamvr_application_manifest(
+    path: Path,
+    executable: Path,
+    arguments: str = "",
+) -> None:
+    """Write the persistent SteamVR manifest used for dashboard auto-launch."""
+    resolved_executable = executable.resolve()
+    payload = {
+        "source": APP_NAME,
+        "applications": [
+            {
+                "app_key": STEAMVR_APPLICATION_KEY,
+                "launch_type": "binary",
+                "binary_path_windows": str(resolved_executable),
+                "arguments": arguments,
+                "working_directory": str(resolved_executable.parent),
+                "is_dashboard_overlay": True,
+                "strings": {
+                    "en_us": {
+                        "name": APP_NAME,
+                        "description": (
+                            "Adaptive SteamVR resolution controller and OSD"
+                        ),
+                    }
+                },
+            }
+        ],
+    }
+    path.parent.mkdir(parents=True, exist_ok=True)
+    temporary = path.with_suffix(path.suffix + ".tmp")
+    temporary.write_text(
+        json.dumps(payload, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
+    temporary.replace(path)
 
 
 class AdaptiveRuntime:

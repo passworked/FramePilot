@@ -27,7 +27,6 @@
   "ui.one_step_adjustment": "Einmalige automatische Anpassung",
   "ui.continuous_adaptive": "Kontinuierliche Anpassung",
   "ui.allow_framepilot_vr_to_control_steamvr_resolution": "FramePilot VR die Steuerung der SteamVR-Auflösung erlauben",
-  "ui.start_steamvr_automatically_with_framepilot_vr": "SteamVR automatisch mit FramePilot VR starten",
   "ui.restore_startup_value_on_exit": "Startwert beim Beenden wiederherstellen",
   "ui.resolution_adjustment_range_and_rules": "Bereich und Regeln zur Auflösungsanpassung",
   "ui.the_app_changes_only_resolution_it_does_not_rewrite_these_rules": "Die App ändert automatisch nur die Auflösung, nicht diese Regeln.",
@@ -227,10 +226,6 @@
   "ui.current_recommendation": "Aktuelle Empfehlungen",
   "event.target_fps_lowered": "Zielbildrate von {old_fps:g} auf {new_fps:g} FPS gesenkt; Warten auf eine stabile tatsächliche Bildrate, bevor eine Auflösungserhöhung berechnet wird",
   "ui.language_switched": "Die Sprache wurde umgestellt",
-  "ui.steamvr_is_already_running_automatic_startup_was_skipped": "SteamVR läuft bereits, der automatische Start wurde übersprungen",
-  "ui.requested_steam_to_start_steamvr": "Hat Steam gebeten, SteamVR zu starten",
-  "ui.unable_to_start_steamvr_automatically": "SteamVR kann nicht automatisch gestartet werden",
-  "ui.save_this_option_it_takes_effect_the_next_time_framepilot_vr_sta_00fe9ad5": "Speichern Sie diese Option; Es wird wirksam, wenn Sie FramePilot VR das nächste Mal starten.",
   "message.when_cleared_the_app_only_monitors_and_recommends_without_writin_737236c6": "Wenn deaktiviert, überwacht FramePilot nur und gibt Empfehlungen, ohne in SteamVR zu schreiben. Wenn aktiviert, können Einzelschritt-, kontinuierliche und manuelle Aktionen den resolutionScale des aktuellen Spiels ändern; diese Auswahl wird auf diesem PC gespeichert.",
   "ui.import_failed": "Der Import ist fehlgeschlagen",
   "ui.sharing_data_is_already_uploading": "Freigegebene Daten werden hochgeladen",
@@ -283,5 +278,10 @@
   "ui.adjacent_population_bucket_interpolation": "Interpolation benachbarter Gruppen",
   "ui.population_experience_offset": "Spielerzahl-Erfahrungsversatz",
   "ui.local_experience": "Lokale Erfahrung",
-  "format.local_experience_status": "{kind} · Quelle {source} Personen · Ziel {target} % · Versatz {adjustment:+d} % · Konfidenz {confidence:.0f} %"
+  "format.local_experience_status": "{kind} · Quelle {source} Personen · Ziel {target} % · Versatz {adjustment:+d} % · Konfidenz {confidence:.0f} %",
+  "ui.launch_framepilot_when_steamvr_starts": "FramePilot VR beim Start von SteamVR öffnen",
+  "ui.register_with_steamvr_startup": "Registriert sich im SteamVR-Autostart und gilt ab dem nächsten SteamVR-Start.",
+  "event.framepilot_steamvr_autolaunch_enabled": "Aktiviert: SteamVR startet FramePilot VR automatisch",
+  "event.framepilot_steamvr_autolaunch_disabled": "Deaktiviert: SteamVR startet FramePilot VR nicht mehr automatisch",
+  "event.framepilot_steamvr_autolaunch_failed": "Der SteamVR-Autostart für FramePilot VR konnte nicht aktualisiert werden: {detail}"
 }

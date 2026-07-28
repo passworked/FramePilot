@@ -10,10 +10,9 @@ from steamvr_adaptive_gui import (
     ONBOARDING_PAGE_BUILDERS,
     ONBOARDING_PAGE_COUNT,
     SHOW_AB_EXPERIMENT_UI,
-    STEAMVR_LAUNCH_URI,
     auto_upload_due,
     cached_write_permission,
-    request_steamvr_start,
+    launch_with_steamvr_setting,
     main,
 )
 
@@ -72,6 +71,15 @@ class _FakeSettings:
     def value(self, key: str, default: object = None) -> object:
         return self.values.get(key, default)
 
+    def contains(self, key: str) -> bool:
+        return key in self.values
+
+    def setValue(self, key: str, value: object) -> None:
+        self.values[key] = value
+
+    def sync(self) -> None:
+        pass
+
 
 class WritePermissionCacheTests(unittest.TestCase):
     def test_saved_write_permission_is_restored_at_startup(self) -> None:
@@ -90,39 +98,26 @@ class WritePermissionCacheTests(unittest.TestCase):
 
 
 class SteamVRAutostartTests(unittest.TestCase):
-    def test_running_steamvr_does_not_open_uri(self) -> None:
-        opened: list[str] = []
+    def test_legacy_reversed_setting_migrates_to_launch_with_steamvr(self) -> None:
+        settings = _FakeSettings({"startup/steamvr_autostart": True})
 
-        state, detail = request_steamvr_start(
-            process_checker=lambda _name: True,
-            url_opener=opened.append,
+        enabled = launch_with_steamvr_setting(settings)  # type: ignore[arg-type]
+
+        self.assertTrue(enabled)
+        self.assertTrue(settings.values["startup/launch_with_steamvr"])
+        self.assertFalse(settings.values["startup/steamvr_autostart"])
+
+    def test_new_launch_with_steamvr_setting_takes_precedence(self) -> None:
+        settings = _FakeSettings(
+            {
+                "startup/launch_with_steamvr": False,
+                "startup/steamvr_autostart": True,
+            }
         )
 
-        self.assertEqual((state, detail), ("already_running", ""))
-        self.assertEqual(opened, [])
+        enabled = launch_with_steamvr_setting(settings)  # type: ignore[arg-type]
 
-    def test_stopped_steamvr_opens_official_steam_uri(self) -> None:
-        opened: list[str] = []
-
-        state, detail = request_steamvr_start(
-            process_checker=lambda _name: False,
-            url_opener=opened.append,
-        )
-
-        self.assertEqual((state, detail), ("requested", ""))
-        self.assertEqual(opened, [STEAMVR_LAUNCH_URI])
-
-    def test_uri_launch_failure_is_reported(self) -> None:
-        def fail_to_open(_uri: str) -> None:
-            raise OSError("no Steam handler")
-
-        state, detail = request_steamvr_start(
-            process_checker=lambda _name: False,
-            url_opener=fail_to_open,
-        )
-
-        self.assertEqual(state, "failed")
-        self.assertEqual(detail, "no Steam handler")
+        self.assertFalse(enabled)
 
 
 class ProductionUiTests(unittest.TestCase):
@@ -146,7 +141,7 @@ class ProductionUiTests(unittest.TestCase):
                 result = main()
 
             self.assertEqual(result, 0)
-            self.assertEqual(output.read_text(encoding="utf-8"), "0.14.0")
+            self.assertEqual(output.read_text(encoding="utf-8"), "0.14.1")
 
 
 if __name__ == "__main__":

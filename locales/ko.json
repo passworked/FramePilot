@@ -27,7 +27,6 @@
   "ui.one_step_adjustment": "한 단계 자동 조정",
   "ui.continuous_adaptive": "연속 자동 조정",
   "ui.allow_framepilot_vr_to_control_steamvr_resolution": "FramePilot VR의 SteamVR 해상도 제어 허용",
-  "ui.start_steamvr_automatically_with_framepilot_vr": "FramePilot VR 시작 시 SteamVR 자동 시작",
   "ui.restore_startup_value_on_exit": "종료 시 시작 값 복원",
   "ui.resolution_adjustment_range_and_rules": "해상도 조정 범위 및 규칙",
   "ui.the_app_changes_only_resolution_it_does_not_rewrite_these_rules": "앱은 해상도만 자동 변경하며 이 규칙은 변경하지 않습니다.",
@@ -227,10 +226,6 @@
   "ui.current_recommendation": "현재 권장값",
   "event.target_fps_lowered": "목표 프레임 레이트 감소 {old_fps:g} → {new_fps:g} FPS. 실제 프레임 주기가 안정되면 해상도 상향을 예측",
   "ui.language_switched": "언어 변경됨",
-  "ui.steamvr_is_already_running_automatic_startup_was_skipped": "SteamVR이 이미 실행 중이며 자동 실행을 건너뛰었습니다.",
-  "ui.requested_steam_to_start_steamvr": "Steam에 SteamVR 실행을 요청했습니다.",
-  "ui.unable_to_start_steamvr_automatically": "SteamVR을 자동으로 시작할 수 없습니다",
-  "ui.save_this_option_it_takes_effect_the_next_time_framepilot_vr_sta_00fe9ad5": "이 옵션을 저장하세요. 다음에 FramePilot VR을 시작할 때부터 적용됩니다.",
   "message.when_cleared_the_app_only_monitors_and_recommends_without_writin_737236c6": "선택하지 않으면 모니터링과 권장만 수행하며 SteamVR에 쓰지 않습니다. 선택하면 단일 단계, 연속 및 수동 작업으로 현재 게임의 resolutionScale을 변경할 수 있고 이 선택은 이 PC에 저장됩니다.",
   "ui.import_failed": "가져오기 실패",
   "ui.sharing_data_is_already_uploading": "공유 데이터를 업로드하는 중입니다.",
@@ -283,5 +278,10 @@
   "ui.adjacent_population_bucket_interpolation": "인접 인원 구간 보간",
   "ui.population_experience_offset": "인원 경험 오프셋",
   "ui.local_experience": "로컬 경험",
-  "format.local_experience_status": "{kind} · 기준 {source}명 · 목표 {target}% · 인원 오프셋 {adjustment:+d}% · 신뢰도 {confidence:.0f}%"
+  "format.local_experience_status": "{kind} · 기준 {source}명 · 목표 {target}% · 인원 오프셋 {adjustment:+d}% · 신뢰도 {confidence:.0f}%",
+  "ui.launch_framepilot_when_steamvr_starts": "SteamVR 시작 시 FramePilot VR 자동 실행",
+  "ui.register_with_steamvr_startup": "SteamVR 시작 항목에 등록되며 다음 SteamVR 실행부터 적용됩니다.",
+  "event.framepilot_steamvr_autolaunch_enabled": "활성화됨: SteamVR 시작 시 FramePilot VR을 실행합니다",
+  "event.framepilot_steamvr_autolaunch_disabled": "비활성화됨: SteamVR이 FramePilot VR을 자동 실행하지 않습니다",
+  "event.framepilot_steamvr_autolaunch_failed": "FramePilot VR의 SteamVR 시작 항목을 업데이트할 수 없습니다: {detail}"
 }

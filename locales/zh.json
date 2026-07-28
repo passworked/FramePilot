@@ -27,7 +27,6 @@
   "ui.one_step_adjustment": "单步自动调整",
   "ui.continuous_adaptive": "连续自适应",
   "ui.allow_framepilot_vr_to_control_steamvr_resolution": "允许 FramePilot VR 调控 SteamVR 分辨率",
-  "ui.start_steamvr_automatically_with_framepilot_vr": "启动 FramePilot VR 时自动启动 SteamVR",
   "ui.restore_startup_value_on_exit": "退出时恢复启动值",
   "ui.resolution_adjustment_range_and_rules": "分辨率调节范围与规则",
   "ui.the_app_changes_only_resolution_it_does_not_rewrite_these_rules": "程序只自动改变分辨率，不会自行修改这些规则。",
@@ -227,10 +226,6 @@
   "ui.current_recommendation": "当前建议",
   "event.target_fps_lowered": "目标帧率降低 {old_fps:g} → {new_fps:g} FPS；等待实际节拍稳定后预测升档",
   "ui.language_switched": "语言已切换",
-  "ui.steamvr_is_already_running_automatic_startup_was_skipped": "SteamVR 已在运行，已跳过自动启动",
-  "ui.requested_steam_to_start_steamvr": "已请求 Steam 启动 SteamVR",
-  "ui.unable_to_start_steamvr_automatically": "无法自动启动 SteamVR",
-  "ui.save_this_option_it_takes_effect_the_next_time_framepilot_vr_sta_00fe9ad5": "保存此选项；从下次启动 FramePilot VR 起生效。",
   "message.when_cleared_the_app_only_monitors_and_recommends_without_writin_737236c6": "未勾选时只监控和推荐，不会写入 SteamVR。勾选后，单步、连续和手动操作可修改当前游戏的 resolutionScale；此选择会保存到本机。",
   "ui.import_failed": "导入失败",
   "ui.sharing_data_is_already_uploading": "共享数据正在上传",
@@ -283,5 +278,10 @@
   "ui.adjacent_population_bucket_interpolation": "相邻人数档插值",
   "ui.population_experience_offset": "人数经验偏移",
   "ui.local_experience": "本地经验",
-  "format.local_experience_status": "{kind} · 来源 {source} 人 · 目标 {target}% · 人数偏移 {adjustment:+d}% · 置信度 {confidence:.0f}%"
+  "format.local_experience_status": "{kind} · 来源 {source} 人 · 目标 {target}% · 人数偏移 {adjustment:+d}% · 置信度 {confidence:.0f}%",
+  "ui.launch_framepilot_when_steamvr_starts": "SteamVR 启动时自动启动 FramePilot VR",
+  "ui.register_with_steamvr_startup": "注册到 SteamVR 启动项；从下次启动 SteamVR 起生效。",
+  "event.framepilot_steamvr_autolaunch_enabled": "已启用：SteamVR 启动时自动启动 FramePilot VR",
+  "event.framepilot_steamvr_autolaunch_disabled": "已关闭：SteamVR 不再自动启动 FramePilot VR",
+  "event.framepilot_steamvr_autolaunch_failed": "无法更新 SteamVR 的 FramePilot VR 自动启动项：{detail}"
 }

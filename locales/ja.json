@@ -27,7 +27,6 @@
   "ui.one_step_adjustment": "単発の自動調整",
   "ui.continuous_adaptive": "連続自動調整",
   "ui.allow_framepilot_vr_to_control_steamvr_resolution": "FramePilot VR に SteamVR 解像度の調整を許可",
-  "ui.start_steamvr_automatically_with_framepilot_vr": "FramePilot VR 起動時に SteamVR も自動起動",
   "ui.restore_startup_value_on_exit": "終了時に起動時の値を復元",
   "ui.resolution_adjustment_range_and_rules": "解像度調整の範囲とルール",
   "ui.the_app_changes_only_resolution_it_does_not_rewrite_these_rules": "アプリは解像度のみを自動変更し、これらのルールは変更しません。",
@@ -227,10 +226,6 @@
   "ui.current_recommendation": "現在の推奨事項",
   "event.target_fps_lowered": "目標フレームレートを {old_fps:g} → {new_fps:g} FPS に引き下げ。実際のフレーム周期が安定してから解像度の引き上げを予測",
   "ui.language_switched": "言語が切り替わりました",
-  "ui.steamvr_is_already_running_automatic_startup_was_skipped": "SteamVR はすでに実行されており、自動起動はスキップされました",
-  "ui.requested_steam_to_start_steamvr": "Steam に SteamVR の起動をリクエスト",
-  "ui.unable_to_start_steamvr_automatically": "SteamVR を自動的に起動できません",
-  "ui.save_this_option_it_takes_effect_the_next_time_framepilot_vr_sta_00fe9ad5": "このオプションを保存します。次回 FramePilot VR を起動したときから有効になります。",
   "message.when_cleared_the_app_only_monitors_and_recommends_without_writin_737236c6": "無効時は監視と推奨のみで SteamVR へ書き込みません。有効時は単発・連続・手動操作で現在のゲームの resolutionScale を変更でき、この選択はこの PC に保存されます。",
   "ui.import_failed": "インポートに失敗しました",
   "ui.sharing_data_is_already_uploading": "共有データをアップロード中です",
@@ -283,5 +278,10 @@
   "ui.adjacent_population_bucket_interpolation": "隣接人数帯の補間",
   "ui.population_experience_offset": "人数経験オフセット",
   "ui.local_experience": "ローカル経験",
-  "format.local_experience_status": "{kind} · 元データ {source} 人 · 目標 {target}% · 人数補正 {adjustment:+d}% · 信頼度 {confidence:.0f}%"
+  "format.local_experience_status": "{kind} · 元データ {source} 人 · 目標 {target}% · 人数補正 {adjustment:+d}% · 信頼度 {confidence:.0f}%",
+  "ui.launch_framepilot_when_steamvr_starts": "SteamVR起動時にFramePilot VRを自動起動",
+  "ui.register_with_steamvr_startup": "SteamVRのスタートアップに登録し、次回のSteamVR起動時から有効になります。",
+  "event.framepilot_steamvr_autolaunch_enabled": "有効：SteamVR起動時にFramePilot VRを起動します",
+  "event.framepilot_steamvr_autolaunch_disabled": "無効：SteamVRはFramePilot VRを自動起動しません",
+  "event.framepilot_steamvr_autolaunch_failed": "FramePilot VRのSteamVRスタートアップ設定を更新できません：{detail}"
 }

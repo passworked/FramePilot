@@ -27,7 +27,6 @@
   "ui.one_step_adjustment": "One-step adjustment",
   "ui.continuous_adaptive": "Continuous adaptive",
   "ui.allow_framepilot_vr_to_control_steamvr_resolution": "Allow FramePilot VR to control SteamVR resolution",
-  "ui.start_steamvr_automatically_with_framepilot_vr": "Start SteamVR automatically with FramePilot VR",
   "ui.restore_startup_value_on_exit": "Restore startup value on exit",
   "ui.resolution_adjustment_range_and_rules": "Resolution adjustment range and rules",
   "ui.the_app_changes_only_resolution_it_does_not_rewrite_these_rules": "The app changes only resolution; it does not rewrite these rules.",
@@ -227,10 +226,6 @@
   "ui.current_recommendation": "Current recommendation",
   "event.target_fps_lowered": "Target frame rate lowered {old_fps:g} → {new_fps:g} FPS; waiting for the actual frame cadence to stabilize before predicting a resolution increase",
   "ui.language_switched": "Language switched",
-  "ui.steamvr_is_already_running_automatic_startup_was_skipped": "SteamVR is already running; automatic startup was skipped",
-  "ui.requested_steam_to_start_steamvr": "Requested Steam to start SteamVR",
-  "ui.unable_to_start_steamvr_automatically": "Unable to start SteamVR automatically",
-  "ui.save_this_option_it_takes_effect_the_next_time_framepilot_vr_sta_00fe9ad5": "Save this option; it takes effect the next time FramePilot VR starts.",
   "message.when_cleared_the_app_only_monitors_and_recommends_without_writin_737236c6": "When cleared, the app only monitors and recommends without writing to SteamVR. When selected, one-step, continuous, and manual actions may change the current game's resolutionScale; this choice is saved on this PC.",
   "ui.import_failed": "Import failed",
   "ui.sharing_data_is_already_uploading": "Sharing data is already uploading",
@@ -283,5 +278,10 @@
   "ui.adjacent_population_bucket_interpolation": "Adjacent population interpolation",
   "ui.population_experience_offset": "Population experience offset",
   "ui.local_experience": "Local experience",
-  "format.local_experience_status": "{kind} · source {source} people · target {target}% · population offset {adjustment:+d}% · confidence {confidence:.0f}%"
+  "format.local_experience_status": "{kind} · source {source} people · target {target}% · population offset {adjustment:+d}% · confidence {confidence:.0f}%",
+  "ui.launch_framepilot_when_steamvr_starts": "Launch FramePilot VR when SteamVR starts",
+  "ui.register_with_steamvr_startup": "Registers with SteamVR startup; takes effect the next time SteamVR starts.",
+  "event.framepilot_steamvr_autolaunch_enabled": "Enabled: SteamVR will launch FramePilot VR when it starts",
+  "event.framepilot_steamvr_autolaunch_disabled": "Disabled: SteamVR will no longer launch FramePilot VR",
+  "event.framepilot_steamvr_autolaunch_failed": "Unable to update the FramePilot VR SteamVR startup entry: {detail}"
 }
