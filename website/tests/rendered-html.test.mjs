@@ -31,6 +31,7 @@ test("renders the FramePilot World Bench shell", async () => {
   assert.match(html, /<title>FramePilot World Bench/);
   assert.match(html, /当前观测榜/);
   assert.match(html, /VR Poker/);
-  assert.match(html, /2,380/);
+  assert.match(html, /静かなところ/);
+  assert.match(html, /2,527/);
   assert.doesNotMatch(html, /codex-preview|react-loading-skeleton/);
 });

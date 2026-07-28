@@ -1,4 +1,4 @@
-FramePilot VR v0.13.3
+FramePilot VR v0.13.4
 快速开始 / QUICK START
 ========================================
 

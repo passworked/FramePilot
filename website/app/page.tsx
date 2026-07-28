@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { snapshotAt, worlds } from "./worlds";
+import { snapshotAt, snapshotSummary, worlds } from "./worlds";
 
 type SortKey = "samples" | "score" | "heavy";
 
@@ -82,9 +82,9 @@ export default function Home() {
         </div>
 
         <div className="stat-panel">
-          <div><strong>17</strong><span>收录地图</span></div>
-          <div><strong>2,380</strong><span>遥测记录</span></div>
-          <div><strong>1</strong><span>贡献设备</span></div>
+          <div><strong>{worlds.length}</strong><span>收录地图</span></div>
+          <div><strong>{snapshotSummary.totalRecords.toLocaleString("zh-CN")}</strong><span>遥测记录</span></div>
+          <div><strong>{snapshotSummary.contributors}</strong><span>贡献设备</span></div>
           <p>数据快照 · {snapshotAt}</p>
         </div>
       </section>
