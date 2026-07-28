@@ -14,3 +14,8 @@ screenshots/
 server/world-worker/.wrangler/
 *.log
 FramePilotVR-*-windows-x64.zip
+
+# Kept locally, but intentionally excluded from the software repository.
+/bilibili-materials/
+/booth-materials/
+/website/
