@@ -1,6 +1,9 @@
 from __future__ import annotations
 
 import unittest
+from pathlib import Path
+import tempfile
+from unittest.mock import patch
 
 from steamvr_adaptive_gui import (
     AUTO_UPLOAD_MIN_INTERVAL_SECONDS,
@@ -11,6 +14,7 @@ from steamvr_adaptive_gui import (
     auto_upload_due,
     cached_write_permission,
     request_steamvr_start,
+    main,
 )
 
 
@@ -129,6 +133,20 @@ class ProductionUiTests(unittest.TestCase):
         self.assertEqual(ONBOARDING_PAGE_COUNT, 4)
         self.assertEqual(ONBOARDING_PAGE_BUILDERS[0], "_language_page")
         self.assertEqual(ONBOARDING_PAGE_BUILDERS[-1], "_welcome_page")
+
+    def test_packaged_version_can_be_verified_without_starting_ui(self) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="framepilot-version-test-"
+        ) as temporary:
+            output = Path(temporary) / "version.txt"
+            with patch(
+                "sys.argv",
+                ["FramePilotVR.exe", "--write-version-file", str(output)],
+            ):
+                result = main()
+
+            self.assertEqual(result, 0)
+            self.assertEqual(output.read_text(encoding="utf-8"), "0.14.0")
 
 
 if __name__ == "__main__":

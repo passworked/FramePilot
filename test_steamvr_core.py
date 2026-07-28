@@ -17,7 +17,11 @@ from steamvr_core import (
     SteamVRSession,
     WindowStats,
 )
-from vrc_context import VrcResolutionProfileStore
+from vrc_context import (
+    VrcContextSnapshot,
+    VrcProfileEstimate,
+    VrcResolutionProfileStore,
+)
 
 
 class _GpuSampler:
@@ -73,6 +77,28 @@ class _DashboardSession(_SessionBase):
 
     def dashboard_visible(self) -> bool | None:
         return self.visible
+
+
+class _VrcSession(_SessionBase):
+    def __init__(self) -> None:
+        super().__init__()
+        self.scale = 130
+
+    def scene_application(self) -> tuple[int, str]:
+        return 1234, "steam.app.438100"
+
+
+class _VrcProvider:
+    def poll(self, now: float) -> VrcContextSnapshot:
+        return VrcContextSnapshot(
+            world_id="wrld_test",
+            population=8,
+            population_bucket="6-10",
+            ready=True,
+            joined_at=1.0,
+            last_population_change_at=1.0,
+            seconds_since_population_change=max(0.0, now - 1.0),
+        )
 
 
 class DashboardVisibilityTests(unittest.TestCase):
@@ -269,7 +295,7 @@ class RecoveryPolicyTests(unittest.TestCase):
             store = VrcResolutionProfileStore(path)
             profile = store.get("hardware", "world", "1-5", "d4")
 
-            self.assertEqual(store.data["schema_version"], 2)
+            self.assertEqual(store.data["schema_version"], 3)
             self.assertIsNotNone(profile)
             assert profile is not None
             self.assertEqual(profile["safe_scale"], 80)
@@ -277,6 +303,164 @@ class RecoveryPolicyTests(unittest.TestCase):
             self.assertEqual(profile["pressure_samples"], 0)
             self.assertEqual(profile["legacy_v1_unsafe_scale"], 20)
             self.assertEqual(profile["legacy_v1_pressure_samples"], 400)
+
+    def test_local_experience_direct_raise_respects_jump_limit(self) -> None:
+        runtime = AdaptiveRuntime(
+            RuntimeConfig(
+                mode="continuous",
+                armed=True,
+                vrc_experience_delay_seconds=5.0,
+                vrc_experience_max_raise=15,
+            )
+        )
+        runtime.current_scale = 100
+        runtime.vrc_context = VrcContextSnapshot(
+            world_id="wrld_test",
+            population=12,
+            population_bucket="11-20",
+            ready=True,
+        )
+        runtime.vrc_context_stable_since = 0.0
+        estimate = VrcProfileEstimate(
+            target_scale=140,
+            basis_scale=140,
+            source_bucket="11-20",
+            kind="exact",
+            confidence=0.8,
+            samples=60,
+            unsafe_scale=0,
+            population_adjustment=0,
+        )
+        stats = WindowStats(60, 5.0, 6.0, 5.0, 12.0, 0.0, 0, 0)
+
+        decision = runtime._vrc_experience_decision(
+            estimate,
+            "experience-key",
+            stats,
+            11.111,
+            50.0,
+            5.1,
+        )
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision.action, "up")
+        self.assertEqual(decision.proposed_scale, 115)
+
+    def test_local_experience_can_directly_lower_scale(self) -> None:
+        runtime = AdaptiveRuntime(
+            RuntimeConfig(
+                mode="continuous",
+                armed=True,
+                vrc_experience_delay_seconds=0.0,
+            )
+        )
+        runtime.current_scale = 130
+        runtime.vrc_context = VrcContextSnapshot(
+            world_id="wrld_test",
+            population=24,
+            population_bucket="21-40",
+            ready=True,
+        )
+        estimate = VrcProfileEstimate(
+            target_scale=105,
+            basis_scale=110,
+            source_bucket="11-20",
+            kind="extrapolated",
+            confidence=0.7,
+            samples=60,
+            unsafe_scale=0,
+            population_adjustment=-5,
+        )
+        overloaded = WindowStats(60, 20.0, 25.0, 20.0, 25.0, 10.0, 3, 0)
+
+        decision = runtime._vrc_experience_decision(
+            estimate,
+            "experience-key",
+            overloaded,
+            11.111,
+            99.0,
+            1.0,
+        )
+
+        self.assertIsNotNone(decision)
+        assert decision is not None
+        self.assertEqual(decision.action, "down")
+        self.assertEqual(decision.proposed_scale, 105)
+
+    def test_auto_mode_applies_saved_world_scale_but_suggest_mode_does_not(
+        self,
+    ) -> None:
+        with tempfile.TemporaryDirectory(
+            prefix="framepilot-runtime-experience-"
+        ) as temporary:
+            profile_path = Path(temporary) / "profiles.json"
+
+            def make_runtime(mode: str) -> tuple[AdaptiveRuntime, _VrcSession]:
+                runtime = AdaptiveRuntime(
+                    RuntimeConfig(
+                        mode="continuous",
+                        armed=True,
+                        target_divisor=2,
+                        window_seconds=1.0,
+                        evaluate_seconds=0.1,
+                        cooldown_seconds=0.0,
+                        vrc_experience_mode=mode,
+                        vrc_experience_delay_seconds=0.0,
+                    )
+                )
+                session = _VrcSession()
+                runtime.session = session  # type: ignore[assignment]
+                runtime.gpu_sampler = _GpuSampler()  # type: ignore[assignment]
+                runtime.vrc_context_provider = _VrcProvider()  # type: ignore[assignment]
+                runtime.vrc_profile_store = VrcResolutionProfileStore(
+                    profile_path
+                )
+                runtime.vrc_profile_store.data["profiles"] = {
+                    "hardware": {
+                        "wrld_test|6-10|d2": {
+                            "world_id": "wrld_test",
+                            "population_bucket": "6-10",
+                            "target": "d2",
+                            "safe_scale": 100,
+                            "safe_evidence": 30,
+                            "unsafe_scale": 0,
+                            "samples": 60,
+                            "updated_at": "",
+                        }
+                    }
+                }
+                runtime.hardware_context = HardwareContext(
+                    "hardware",
+                    "machine",
+                    "gpu",
+                    "maker",
+                    "hmd",
+                    72.0,
+                    2000,
+                    2000,
+                )
+                runtime.connected = True
+                return runtime, session
+
+            automatic, automatic_session = make_runtime("auto")
+            suggestions, suggestion_session = make_runtime("suggest")
+            with patch("steamvr_core.process_running", return_value=True):
+                automatic_snapshot = automatic.poll(10.0)
+                suggestion_snapshot = suggestions.poll(10.0)
+
+            self.assertIsNotNone(automatic_snapshot)
+            self.assertIsNotNone(suggestion_snapshot)
+            assert automatic_snapshot is not None
+            assert suggestion_snapshot is not None
+            self.assertEqual(automatic_session.scale_writes, [100])
+            self.assertTrue(automatic_snapshot.write_applied)
+            self.assertEqual(suggestion_session.scale_writes, [])
+            self.assertFalse(suggestion_snapshot.write_applied)
+            self.assertEqual(
+                suggestion_snapshot.decision.proposed_scale,
+                100,
+            )
 
 
 if __name__ == "__main__":

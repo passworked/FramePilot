@@ -28,7 +28,14 @@ LOG_DISCOVERY_INTERVAL_SECONDS = 1.0
 PROFILE_SAVE_INTERVAL_SECONDS = 5.0
 SAFE_STREAK_SAMPLES = 8
 PRESSURE_STREAK_SAMPLES = 3
-PROFILE_SCHEMA_VERSION = 2
+PROFILE_SCHEMA_VERSION = 3
+POPULATION_BUCKETS = (
+    ("1-5", 1, 5),
+    ("6-10", 6, 10),
+    ("11-20", 11, 20),
+    ("21-40", 21, 40),
+    ("41+", 41, 80),
+)
 
 
 def population_bucket(population: int) -> str:
@@ -42,6 +49,33 @@ def population_bucket(population: int) -> str:
     if population <= 40:
         return "21-40"
     return "41+"
+
+
+def population_bucket_index(bucket: str) -> int:
+    for index, (name, _minimum, _maximum) in enumerate(POPULATION_BUCKETS):
+        if name == bucket:
+            return index
+    return -1
+
+
+def population_bucket_midpoint(bucket: str) -> float:
+    index = population_bucket_index(bucket)
+    if index < 0:
+        return 0.0
+    _name, minimum, maximum = POPULATION_BUCKETS[index]
+    return (minimum + maximum) / 2.0
+
+
+@dataclass(frozen=True)
+class VrcProfileEstimate:
+    target_scale: int
+    basis_scale: int
+    source_bucket: str
+    kind: str
+    confidence: float
+    samples: int
+    unsafe_scale: int
+    population_adjustment: int
 
 
 def target_key(target_divisor: int, target_fps: float) -> str:
@@ -223,8 +257,11 @@ class VrcResolutionProfileStore:
                 return
             if loaded.get("schema_version") == PROFILE_SCHEMA_VERSION:
                 self.data = loaded
+            elif loaded.get("schema_version") == 2:
+                self.data = self._migrate_v2(loaded)
+                self.dirty = True
             elif loaded.get("schema_version") == 1:
-                self.data = self._migrate_v1(loaded)
+                self.data = self._migrate_v2(self._migrate_v1(loaded))
                 self.dirty = True
         except (OSError, ValueError, TypeError):
             pass
@@ -252,6 +289,31 @@ class VrcResolutionProfileStore:
         return loaded
 
     @staticmethod
+    def _migrate_v2(loaded: dict[str, object]) -> dict[str, object]:
+        profiles = loaded.get("profiles")
+        if isinstance(profiles, dict):
+            for hardware in profiles.values():
+                if not isinstance(hardware, dict):
+                    continue
+                for profile in hardware.values():
+                    if not isinstance(profile, dict):
+                        continue
+                    bucket = str(profile.get("population_bucket", ""))
+                    index = population_bucket_index(bucket)
+                    if index < 0:
+                        continue
+                    _name, minimum, maximum = POPULATION_BUCKETS[index]
+                    profile.setdefault("population_min", minimum)
+                    profile.setdefault("population_max", maximum)
+                    profile.setdefault(
+                        "population_mean",
+                        round((minimum + maximum) / 2.0, 2),
+                    )
+                    profile.setdefault("population_observations", 0)
+        loaded["schema_version"] = PROFILE_SCHEMA_VERSION
+        return loaded
+
+    @staticmethod
     def profile_key(world_id: str, bucket: str, cadence: str) -> str:
         return f"{world_id}|{bucket}|{cadence}"
 
@@ -273,6 +335,171 @@ class VrcResolutionProfileStore:
     ) -> dict[str, object] | None:
         value = self._hardware_profiles(hardware_id).get(self.profile_key(world_id, bucket, cadence))
         return value if isinstance(value, dict) else None
+
+    def profiles_for_world(
+        self,
+        hardware_id: str,
+        world_id: str,
+        cadence: str,
+    ) -> list[dict[str, object]]:
+        output: list[dict[str, object]] = []
+        for value in self._hardware_profiles(hardware_id).values():
+            if not isinstance(value, dict):
+                continue
+            if (
+                str(value.get("world_id", "")) == world_id
+                and str(value.get("target", "")) == cadence
+            ):
+                output.append(value)
+        return output
+
+    def estimate(
+        self,
+        hardware_id: str,
+        world_id: str,
+        population: int,
+        bucket: str,
+        cadence: str,
+        compensation: str = "balanced",
+        allow_population_raise: bool = False,
+    ) -> VrcProfileEstimate | None:
+        all_profiles = self.profiles_for_world(hardware_id, world_id, cadence)
+        profiles = [
+            profile
+            for profile in all_profiles
+            if int(profile.get("safe_scale", 0)) > 0
+        ]
+        if not profiles:
+            return None
+        exact = next(
+            (
+                profile
+                for profile in profiles
+                if str(profile.get("population_bucket", "")) == bucket
+            ),
+            None,
+        )
+        unsafe_values = [
+            int(profile.get("unsafe_scale", 0))
+            for profile in all_profiles
+            if int(profile.get("unsafe_scale", 0)) > 0
+        ]
+        unsafe_scale = min(unsafe_values, default=0)
+        if exact is not None:
+            safe_scale = int(exact.get("safe_scale", 0))
+            if unsafe_scale > 0:
+                safe_scale = min(safe_scale, unsafe_scale - 1)
+            return VrcProfileEstimate(
+                target_scale=safe_scale,
+                basis_scale=int(exact.get("safe_scale", 0)),
+                source_bucket=bucket,
+                kind="exact",
+                confidence=self.effective_confidence(exact),
+                samples=int(exact.get("samples", 0)),
+                unsafe_scale=unsafe_scale,
+                population_adjustment=0,
+            )
+        if compensation == "off":
+            return None
+
+        ordered = sorted(
+            profiles,
+            key=lambda profile: population_bucket_midpoint(
+                str(profile.get("population_bucket", ""))
+            ),
+        )
+        lower = [
+            profile
+            for profile in ordered
+            if population_bucket_midpoint(str(profile.get("population_bucket", "")))
+            < population
+        ]
+        upper = [
+            profile
+            for profile in ordered
+            if population_bucket_midpoint(str(profile.get("population_bucket", "")))
+            > population
+        ]
+        if lower and upper:
+            left = lower[-1]
+            right = upper[0]
+            left_population = population_bucket_midpoint(
+                str(left.get("population_bucket", ""))
+            )
+            right_population = population_bucket_midpoint(
+                str(right.get("population_bucket", ""))
+            )
+            weight = (
+                (population - left_population)
+                / max(1.0, right_population - left_population)
+            )
+            left_scale = int(left.get("safe_scale", 0))
+            right_scale = int(right.get("safe_scale", 0))
+            raw_target = left_scale + (right_scale - left_scale) * weight
+            target = max(20, int(raw_target // 5) * 5)
+            if unsafe_scale > 0:
+                target = min(target, unsafe_scale - 1)
+            return VrcProfileEstimate(
+                target_scale=target,
+                basis_scale=left_scale,
+                source_bucket=(
+                    f"{left.get('population_bucket', '')}"
+                    f"↔{right.get('population_bucket', '')}"
+                ),
+                kind="interpolated",
+                confidence=min(
+                    self.effective_confidence(left),
+                    self.effective_confidence(right),
+                )
+                * 0.9,
+                samples=int(left.get("samples", 0))
+                + int(right.get("samples", 0)),
+                unsafe_scale=unsafe_scale,
+                population_adjustment=target - left_scale,
+            )
+
+        current_index = population_bucket_index(bucket)
+        nearest = min(
+            ordered,
+            key=lambda profile: abs(
+                population_bucket_midpoint(
+                    str(profile.get("population_bucket", ""))
+                )
+                - population
+            ),
+        )
+        source_bucket = str(nearest.get("population_bucket", ""))
+        source_index = population_bucket_index(source_bucket)
+        tier_delta = current_index - source_index
+        down_per_tier, up_per_tier = {
+            "conservative": (8, 0),
+            "balanced": (5, 2),
+            "aggressive": (3, 5),
+        }.get(compensation, (5, 2))
+        if not allow_population_raise:
+            up_per_tier = 0
+        basis_scale = int(nearest.get("safe_scale", 0))
+        adjustment = (
+            -down_per_tier * max(0, tier_delta)
+            + up_per_tier * max(0, -tier_delta)
+        )
+        if tier_delta < 0:
+            adjustment = min(5, adjustment)
+        target = max(20, int((basis_scale + adjustment) // 5) * 5)
+        if unsafe_scale > 0:
+            target = min(target, unsafe_scale - 1)
+        distance = abs(tier_delta)
+        return VrcProfileEstimate(
+            target_scale=target,
+            basis_scale=basis_scale,
+            source_bucket=source_bucket,
+            kind="extrapolated",
+            confidence=self.effective_confidence(nearest)
+            * max(0.5, 1.0 - distance * 0.15),
+            samples=int(nearest.get("samples", 0)),
+            unsafe_scale=unsafe_scale,
+            population_adjustment=target - basis_scale,
+        )
 
     def observe(
         self,
@@ -297,6 +524,10 @@ class VrcResolutionProfileStore:
             {
                 "world_id": context.world_id,
                 "population_bucket": context.population_bucket,
+                "population_min": context.population,
+                "population_max": context.population,
+                "population_mean": float(context.population),
+                "population_observations": 0,
                 "target": cadence,
                 "safe_scale": 0,
                 "safe_evidence": 0,
@@ -309,6 +540,22 @@ class VrcResolutionProfileStore:
         )
         if not isinstance(profile, dict):
             return None
+        observations = int(profile.get("population_observations", 0))
+        previous_mean = float(profile.get("population_mean", context.population))
+        profile["population_min"] = min(
+            int(profile.get("population_min", context.population)),
+            context.population,
+        )
+        profile["population_max"] = max(
+            int(profile.get("population_max", context.population)),
+            context.population,
+        )
+        profile["population_observations"] = observations + 1
+        profile["population_mean"] = round(
+            (previous_mean * observations + context.population)
+            / (observations + 1),
+            2,
+        )
         stable = (
             gpu_ms <= budget_ms * 0.85
             and cpu_ms <= budget_ms * 0.92
@@ -355,6 +602,69 @@ class VrcResolutionProfileStore:
         self.save_if_due(now)
         return profile
 
+    def record_unsafe(
+        self,
+        hardware_id: str,
+        world_id: str,
+        bucket: str,
+        cadence: str,
+        scale: int,
+        now: float,
+    ) -> None:
+        profile = self.get(hardware_id, world_id, bucket, cadence)
+        if profile is None:
+            index = population_bucket_index(bucket)
+            _name, minimum, maximum = (
+                POPULATION_BUCKETS[index]
+                if index >= 0
+                else (bucket, 0, 0)
+            )
+            key = self.profile_key(world_id, bucket, cadence)
+            profile = {
+                "world_id": world_id,
+                "population_bucket": bucket,
+                "population_min": minimum,
+                "population_max": maximum,
+                "population_mean": population_bucket_midpoint(bucket),
+                "population_observations": 0,
+                "target": cadence,
+                "safe_scale": 0,
+                "safe_evidence": 0,
+                "unsafe_scale": 0,
+                "stable_samples": 0,
+                "pressure_samples": 0,
+                "samples": 0,
+                "updated_at": "",
+            }
+            self._hardware_profiles(hardware_id)[key] = profile
+        previous = int(profile.get("unsafe_scale", 0))
+        profile["unsafe_scale"] = scale if previous <= 0 else min(previous, scale)
+        if int(profile.get("safe_scale", 0)) >= int(profile["unsafe_scale"]):
+            profile["safe_scale"] = max(0, int(profile["unsafe_scale"]) - 1)
+            profile["safe_evidence"] = 0
+        profile["pressure_samples"] = int(profile.get("pressure_samples", 0)) + 1
+        profile["updated_at"] = dt.datetime.now().isoformat(timespec="seconds")
+        self.dirty = True
+        self.save_if_due(now, force=True)
+
+    def forget(self, hardware_id: str, world_id: str | None = None) -> int:
+        hardware = self._hardware_profiles(hardware_id)
+        keys = [
+            key
+            for key, value in hardware.items()
+            if world_id is None
+            or (
+                isinstance(value, dict)
+                and str(value.get("world_id", "")) == world_id
+            )
+        ]
+        for key in keys:
+            hardware.pop(key, None)
+        if keys:
+            self.dirty = True
+            self.save_if_due(time.monotonic(), force=True)
+        return len(keys)
+
     def save_if_due(self, now: float, force: bool = False) -> None:
         if not self.dirty or (not force and now - self.last_save_at < PROFILE_SAVE_INTERVAL_SECONDS):
             return
@@ -376,6 +686,30 @@ class VrcResolutionProfileStore:
         if profile is None:
             return 0.0
         return min(1.0, int(profile.get("safe_evidence", 0)) / 30.0)
+
+    @classmethod
+    def effective_confidence(
+        cls,
+        profile: dict[str, object] | None,
+        now: dt.datetime | None = None,
+    ) -> float:
+        confidence = cls.confidence(profile)
+        if profile is None:
+            return confidence
+        updated_at = str(profile.get("updated_at", ""))
+        if not updated_at:
+            return confidence
+        try:
+            updated = dt.datetime.fromisoformat(updated_at)
+            current = now or dt.datetime.now()
+            age_days = max(0.0, (current - updated).total_seconds() / 86400.0)
+        except (TypeError, ValueError):
+            return confidence
+        if age_days > 90.0:
+            return 0.0
+        if age_days > 30.0:
+            confidence *= 1.0 - ((age_days - 30.0) / 120.0)
+        return max(0.0, min(1.0, confidence))
 
 
 class TelemetryUploadError(RuntimeError):
@@ -1000,7 +1334,7 @@ class PassiveVrcDataCollector:
                 "Content-Type": "application/zip",
                 "Content-Length": str(len(payload)),
                 "X-Batch-SHA256": digest,
-                "User-Agent": "FramePilotVR/0.13.4",
+                "User-Agent": "FramePilotVR/0.14.0",
             },
         )
         try:

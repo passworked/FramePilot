@@ -1,4 +1,4 @@
-FramePilot VR v0.13.4
+FramePilot VR v0.14.0
 快速开始 / QUICK START
 ========================================
 
@@ -21,6 +21,7 @@ FramePilot VR v0.13.4
 6. 若希望以后由 FramePilot VR 启动 SteamVR，勾选“启动 FramePilot VR 时自动启动 SteamVR”；保存后从下次启动生效。
 7. 选择原生刷新率，或刷新率的 1/2、1/3、1/4。72 Hz 会自动对应 72/36/24/18 FPS 预算。
 8. Guide 最后一步还会默认勾选自动上传匿名聚合记录；不希望上传时取消勾选，之后也可在主面板随时关闭。
+9. “本地世界经验”默认自动使用历史安全值；只在写入许可已开启且选择“连续自适应”时真正应用。也可以切换为“仅建议”或“关闭”。
 
 推荐顺序
 1. 观察 GPU/CPU P95、帧预算和建议值。
@@ -34,6 +35,7 @@ FramePilot VR v0.13.4
 - “分辨率调节范围与规则”中的数值不会被程序自行修改；自动变化的只有 SteamVR 分辨率。普通模式只显示预设、只读/连续、刷新率分频、写入许可和只读校准；规则、单步、精确校准、策略迁移及手动设置在高级模式。
 - 日志在程序目录的 logs 文件夹。
 - 本机校准在 %LOCALAPPDATA%\SteamVRAdaptiveResolution\strategy-store.json。
+- 本地世界经验在 %LOCALAPPDATA%\SteamVRAdaptiveResolution\vrc-context-profiles.json；按硬件、世界、人数档和刷新率分频匹配。精确档命中历史值，缺档时使用相邻档插值或人数偏移；可在面板忘记当前世界或清空全部经验。
 - 匿名采集数据在 %LOCALAPPDATA%\SteamVRAdaptiveResolution\shared-telemetry；自动上传按 25 条或 15 分钟合并发送。限流或失败不会删除本地数据，程序会按服务器要求延后重试。
 - 发送给别人时发送完整 ZIP，不要只发 EXE，也不要附带个人日志。
 - Windows SmartScreen 可能提示未知发布者，因为程序未做代码签名。只在来源可信且校验值一致时选择“更多信息 → 仍要运行”，不要关闭杀毒软件。
@@ -58,6 +60,7 @@ How to start
 6. To have FramePilot VR launch SteamVR in the future, enable “Start SteamVR automatically with FramePilot VR.” The saved option takes effect on the next launch.
 7. Select the native refresh rate or 1/2, 1/3, or 1/4 of it. At 72 Hz these become 72/36/24/18 FPS budgets automatically.
 8. The final Guide step also enables automatic upload of anonymous aggregates by default. Clear that checkbox to keep data local; it can also be changed later in the main panel.
+9. “Local world experience” uses previously verified safe values by default. It only writes when permission is enabled and “Continuous adaptive” is selected; choose “Suggestions only” or “Off” to change that behavior.
 
 Recommended workflow
 1. Observe GPU/CPU P95, frame budget, and the recommendation.
@@ -71,6 +74,7 @@ Safety and files
 - Values under “Resolution adjustment range and rules” are not rewritten automatically; only SteamVR resolution changes. Basic mode shows presets, read-only/continuous mode, cadence, write permission, and read-only calibration. Rules, one-step mode, precise calibration, policy migration, and manual controls are in Advanced mode.
 - Logs are stored in the logs folder beside the program.
 - Local calibration is stored at %LOCALAPPDATA%\SteamVRAdaptiveResolution\strategy-store.json.
+- Local world experience is stored at %LOCALAPPDATA%\SteamVRAdaptiveResolution\vrc-context-profiles.json and matched by hardware, world, population bucket, and refresh-rate target. Exact buckets use history; missing buckets use interpolation or a population offset. The panel can forget the current world or clear all experience.
 - Anonymous collection data is stored at %LOCALAPPDATA%\SteamVRAdaptiveResolution\shared-telemetry. Automatic upload batches 25 records or waits 15 minutes. Rate limits and failures do not delete local records; retries honor the server delay.
 - Share the complete ZIP, not only the EXE, and do not include personal logs.
 - Windows SmartScreen may report an unknown publisher because the app is unsigned. Use “More info → Run anyway” only when the source is trusted and the checksum matches. Do not disable antivirus protection.

@@ -65,7 +65,7 @@ from steamvr_core import (
 )
 
 
-APP_VERSION = "0.13.4"
+APP_VERSION = "0.14.0"
 STEAMVR_LAUNCH_URI = "steam://rungameid/250820"
 TELEMETRY_UPLOAD_ENDPOINT = "https://round-darkness-4881.laptop7921.workers.dev"
 ONBOARDING_REVISION = 5
@@ -784,6 +784,9 @@ class MonitorWorker(QObject):
     def submit_restore(self) -> None:
         self.commands.put(("restore", None))
 
+    def submit_forget_vrc_profiles(self, world_id: str | None) -> None:
+        self.commands.put(("forget_vrc_profiles", world_id))
+
     def submit_collection_enabled(self, enabled: bool) -> None:
         self.commands.put(("collection_enabled", bool(enabled)))
 
@@ -851,6 +854,10 @@ class MonitorWorker(QObject):
                     self.runtime.manual_set_scale(int(payload))
                 elif command == "restore":
                     self.runtime.restore_current()
+                elif command == "forget_vrc_profiles":
+                    self.runtime.forget_vrc_profiles(
+                        str(payload) if payload else None
+                    )
                 elif command == "collection_enabled":
                     self.passive_collector.set_enabled(bool(payload))
                     self.collection_status.emit(self.passive_collector.status())
@@ -1498,6 +1505,73 @@ class MainWindow(QMainWindow):
         self.restore_exit_check.setChecked(True)
         mode_layout.addWidget(self.arm_check)
         controls_layout.addWidget(self.mode_group)
+
+        self.experience_group = QGroupBox("本地世界经验")
+        experience_layout = QVBoxLayout(self.experience_group)
+        experience_layout.addWidget(QLabel("使用方式"))
+        self.experience_mode_combo = QComboBox()
+        self.experience_mode_combo.addItem("关闭", "off")
+        self.experience_mode_combo.addItem("仅建议", "suggest")
+        self.experience_mode_combo.addItem("自动应用", "auto")
+        self.experience_mode_combo.setCurrentIndex(
+            self.experience_mode_combo.findData("auto")
+        )
+        self.experience_mode_combo.currentIndexChanged.connect(self.apply_config)
+        experience_layout.addWidget(self.experience_mode_combo)
+        experience_layout.addWidget(QLabel("人数补偿"))
+        self.population_compensation_combo = QComboBox()
+        self.population_compensation_combo.addItem("关闭", "off")
+        self.population_compensation_combo.addItem("保守", "conservative")
+        self.population_compensation_combo.addItem("平衡", "balanced")
+        self.population_compensation_combo.addItem("激进", "aggressive")
+        self.population_compensation_combo.setCurrentIndex(
+            self.population_compensation_combo.findData("balanced")
+        )
+        self.population_compensation_combo.currentIndexChanged.connect(
+            self.apply_config
+        )
+        experience_layout.addWidget(self.population_compensation_combo)
+        self.experience_status_label = QLabel("尚未命中当前世界的历史经验")
+        self.experience_status_label.setWordWrap(True)
+        self.experience_status_label.setObjectName("Muted")
+        experience_layout.addWidget(self.experience_status_label)
+
+        self.experience_advanced = QWidget()
+        experience_advanced_layout = QGridLayout(self.experience_advanced)
+        experience_advanced_layout.setContentsMargins(0, 4, 0, 0)
+        self.population_raise_check = QCheckBox("低人数时允许经验公式上调")
+        self.population_raise_check.setChecked(False)
+        self.population_raise_check.toggled.connect(self.apply_config)
+        experience_advanced_layout.addWidget(
+            self.population_raise_check, 0, 0, 1, 2
+        )
+        self.experience_delay_spin = make_double_spin(0, 60, 5, " s")
+        self.experience_delay_spin.valueChanged.connect(self.apply_config)
+        self.experience_max_raise_spin = make_spin(0, 100, 15, "%")
+        self.experience_max_raise_spin.valueChanged.connect(self.apply_config)
+        self.experience_confidence_spin = make_spin(0, 100, 60, "%")
+        self.experience_confidence_spin.valueChanged.connect(self.apply_config)
+        experience_advanced_layout.addWidget(QLabel("进入世界等待"), 1, 0)
+        experience_advanced_layout.addWidget(self.experience_delay_spin, 1, 1)
+        experience_advanced_layout.addWidget(QLabel("单次历史升档上限"), 2, 0)
+        experience_advanced_layout.addWidget(
+            self.experience_max_raise_spin, 2, 1
+        )
+        experience_advanced_layout.addWidget(QLabel("最低置信度"), 3, 0)
+        experience_advanced_layout.addWidget(
+            self.experience_confidence_spin, 3, 1
+        )
+        experience_layout.addWidget(self.experience_advanced)
+        experience_buttons = QHBoxLayout()
+        self.forget_world_button = QPushButton("忘记当前世界")
+        self.forget_world_button.clicked.connect(self.forget_current_world)
+        self.forget_world_button.setEnabled(False)
+        self.clear_experience_button = QPushButton("清空全部经验")
+        self.clear_experience_button.clicked.connect(self.clear_all_experience)
+        experience_buttons.addWidget(self.forget_world_button)
+        experience_buttons.addWidget(self.clear_experience_button)
+        experience_layout.addLayout(experience_buttons)
+        controls_layout.addWidget(self.experience_group)
 
         self.collection_group = QGroupBox("匿名负载采集")
         collection_layout = QVBoxLayout(self.collection_group)
@@ -2294,6 +2368,7 @@ class MainWindow(QMainWindow):
         self.range_group.setVisible(self.advanced_mode)
         self.manual_group.setVisible(self.advanced_mode)
         self.overlay_advanced.setVisible(self.advanced_mode)
+        self.experience_advanced.setVisible(self.advanced_mode)
         self.experiment_group.setVisible(
             SHOW_AB_EXPERIMENT_UI and self.advanced_mode
         )
@@ -2347,6 +2422,27 @@ class MainWindow(QMainWindow):
         mode_names = {"monitor": "只读监控", "one_step": "单步自动调整", "continuous": "连续自适应"}
         for index in range(self.mode_combo.count()):
             self.mode_combo.setItemText(index, self.tr(mode_names[str(self.mode_combo.itemData(index))]))
+        experience_mode_names = {
+            "off": "关闭",
+            "suggest": "仅建议",
+            "auto": "自动应用",
+        }
+        for index in range(self.experience_mode_combo.count()):
+            mode = str(self.experience_mode_combo.itemData(index))
+            self.experience_mode_combo.setItemText(
+                index, self.tr(experience_mode_names[mode])
+            )
+        compensation_names = {
+            "off": "关闭",
+            "conservative": "保守",
+            "balanced": "平衡",
+            "aggressive": "激进",
+        }
+        for index in range(self.population_compensation_combo.count()):
+            mode = str(self.population_compensation_combo.itemData(index))
+            self.population_compensation_combo.setItemText(
+                index, self.tr(compensation_names[mode])
+            )
         anchor_names = {
             "upper_left": "左上",
             "upper_right": "右上",
@@ -2424,6 +2520,52 @@ class MainWindow(QMainWindow):
             self.up_observation_spin.setValue(number("runtime/up_observation_seconds", 2.0, float))
             self.rollback_cooldown_spin.setValue(number("runtime/up_rollback_cooldown_seconds", 20.0, float))
             self.up_gpu_limit_spin.setValue(number("runtime/up_gpu_limit_pct", 92.0, float))
+            experience_mode = str(
+                self.settings.value("runtime/vrc_experience_mode", "auto")
+            )
+            experience_index = self.experience_mode_combo.findData(
+                experience_mode
+            )
+            if experience_index >= 0:
+                self.experience_mode_combo.setCurrentIndex(experience_index)
+            compensation = str(
+                self.settings.value(
+                    "runtime/vrc_population_compensation",
+                    "balanced",
+                )
+            )
+            compensation_index = self.population_compensation_combo.findData(
+                compensation
+            )
+            if compensation_index >= 0:
+                self.population_compensation_combo.setCurrentIndex(
+                    compensation_index
+                )
+            self.population_raise_check.setChecked(
+                setting_bool(
+                    self.settings,
+                    "runtime/vrc_allow_population_raise",
+                    False,
+                )
+            )
+            self.experience_delay_spin.setValue(
+                number("runtime/vrc_experience_delay_seconds", 5.0, float)
+            )
+            self.experience_max_raise_spin.setValue(
+                number("runtime/vrc_experience_max_raise", 15, int)
+            )
+            self.experience_confidence_spin.setValue(
+                int(
+                    round(
+                        number(
+                            "runtime/vrc_experience_min_confidence",
+                            0.60,
+                            float,
+                        )
+                        * 100
+                    )
+                )
+            )
 
             divisor = number("runtime/target_divisor", 1, int)
             legacy_fps = number("runtime/target_fps", 0.0, float)
@@ -2467,6 +2609,12 @@ class MainWindow(QMainWindow):
             "up_observation_seconds": config.up_observation_seconds,
             "up_rollback_cooldown_seconds": config.up_rollback_cooldown_seconds,
             "up_gpu_limit_pct": config.up_gpu_limit_pct,
+            "vrc_experience_mode": config.vrc_experience_mode,
+            "vrc_population_compensation": config.vrc_population_compensation,
+            "vrc_allow_population_raise": config.vrc_allow_population_raise,
+            "vrc_experience_delay_seconds": config.vrc_experience_delay_seconds,
+            "vrc_experience_max_raise": config.vrc_experience_max_raise,
+            "vrc_experience_min_confidence": config.vrc_experience_min_confidence,
             "armed": config.armed,
         }
         for key, value in values.items():
@@ -2494,6 +2642,16 @@ class MainWindow(QMainWindow):
             up_observation_seconds=self.up_observation_spin.value(),
             up_rollback_cooldown_seconds=self.rollback_cooldown_spin.value(),
             up_gpu_limit_pct=self.up_gpu_limit_spin.value(),
+            vrc_experience_mode=str(self.experience_mode_combo.currentData()),
+            vrc_population_compensation=str(
+                self.population_compensation_combo.currentData()
+            ),
+            vrc_allow_population_raise=self.population_raise_check.isChecked(),
+            vrc_experience_delay_seconds=self.experience_delay_spin.value(),
+            vrc_experience_max_raise=self.experience_max_raise_spin.value(),
+            vrc_experience_min_confidence=(
+                self.experience_confidence_spin.value() / 100.0
+            ),
             startup_scale=150 if str(self.preset_combo.currentData()) == "激进" and self.high_start_qualified else 0,
             restore_on_exit=True,
         ).validated()
@@ -2827,6 +2985,48 @@ class MainWindow(QMainWindow):
     def restore_clicked(self) -> None:
         self.worker.submit_restore()
 
+    def forget_current_world(self) -> None:
+        world_id = str(self.last_snapshot.get("vrc_world_id", ""))
+        if not world_id:
+            QMessageBox.information(
+                self,
+                self.tr("等待 VRChat"),
+                self.tr("当前没有可识别的 VRChat 世界。"),
+            )
+            return
+        answer = QMessageBox.question(
+            self,
+            self.tr("忘记当前世界"),
+            self.tr(
+                "删除当前硬件下这个世界的全部本地分辨率经验？"
+                "匿名负载采集记录不会被删除。"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.worker.submit_forget_vrc_profiles(world_id)
+            self.experience_status_label.setText(
+                self.tr("正在删除当前世界的本地经验…")
+            )
+
+    def clear_all_experience(self) -> None:
+        answer = QMessageBox.warning(
+            self,
+            self.tr("清空全部经验"),
+            self.tr(
+                "删除当前硬件下全部世界的本地分辨率经验？"
+                "此操作不会删除匿名负载采集记录。"
+            ),
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.Cancel,
+            QMessageBox.StandardButton.Cancel,
+        )
+        if answer == QMessageBox.StandardButton.Yes:
+            self.worker.submit_forget_vrc_profiles(None)
+            self.experience_status_label.setText(
+                self.tr("正在清空本地世界经验…")
+            )
+
     def update_connection(self, connected: bool, text: str) -> None:
         self.connection_state = (connected, text)
         self.connection_label.setText(self.localize_message(text))
@@ -2896,6 +3096,43 @@ class MainWindow(QMainWindow):
         )
         self.hmd_label.setText(hmd_text)
         self.hmd_label.setToolTip(hmd_text)
+        world_id = str(data.get("vrc_world_id", ""))
+        self.forget_world_button.setEnabled(bool(world_id))
+        experience_target = int(data.get("vrc_experience_target_scale", 0))
+        if not world_id:
+            experience_text = self.tr("等待进入 VRChat 世界")
+        elif experience_target <= 0:
+            experience_text = self.tr(
+                "当前世界没有可用历史经验，将继续实时学习"
+            )
+        else:
+            kind = {
+                "exact": self.tr("精确人数档"),
+                "interpolated": self.tr("相邻人数档插值"),
+                "extrapolated": self.tr("人数经验偏移"),
+            }.get(
+                str(data.get("vrc_experience_kind", "")),
+                self.tr("本地经验"),
+            )
+            source_bucket = str(
+                data.get("vrc_experience_source_bucket", "")
+            )
+            confidence = float(
+                data.get("vrc_experience_confidence", 0.0)
+            ) * 100.0
+            adjustment = int(
+                data.get("vrc_experience_population_adjustment", 0)
+            )
+            experience_text = self.trf(
+                "{kind} · 来源 {source} 人 · 目标 {target}% · "
+                "人数偏移 {adjustment:+d}% · 置信度 {confidence:.0f}%",
+                kind=kind,
+                source=source_bucket,
+                target=experience_target,
+                adjustment=adjustment,
+                confidence=confidence,
+            )
+        self.experience_status_label.setText(experience_text)
         self.decision_label.setText(
             f"{self.localize_message(str(data['reason']))}\n"
             f"{self.trf('当前建议：{proposed}%', proposed=proposed)}"
@@ -2996,6 +3233,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--overlay-status-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument("--screenshot", type=Path)
     parser.add_argument("--auto-close", type=float, default=0.0)
+    parser.add_argument("--write-version-file", type=Path, help=argparse.SUPPRESS)
     parser.add_argument(
         "--language",
         choices=tuple(code for code, _label in LANGUAGE_OPTIONS),
@@ -3008,6 +3246,9 @@ def parse_args() -> argparse.Namespace:
 
 def main() -> int:
     args = parse_args()
+    if args.write_version_file is not None:
+        args.write_version_file.write_text(APP_VERSION, encoding="utf-8")
+        return 0
     if args.overlay_process:
         from steamvr_overlay import run_overlay
 

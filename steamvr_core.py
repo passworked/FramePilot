@@ -26,6 +26,7 @@ from vrc_context import (
     PassiveVrcDataCollector,
     VrcContextSnapshot,
     VrcLogContextProvider,
+    VrcProfileEstimate,
     VrcResolutionProfileStore,
     target_key as vrc_target_key,
 )
@@ -203,6 +204,7 @@ class WriteObservation:
     pre_gpu_ms: float
     pre_frame_ms: float
     pre_gpu_pct: float | None
+    source: str = ""
     peak_gpu_ms: float = 0.0
     peak_frame_ms: float = 0.0
     peak_gpu_pct: float | None = None
@@ -246,6 +248,12 @@ class RuntimeConfig:
     up_observation_seconds: float = 2.0
     up_rollback_cooldown_seconds: float = 20.0
     up_gpu_limit_pct: float = 92.0
+    vrc_experience_mode: str = "auto"  # off | suggest | auto
+    vrc_population_compensation: str = "balanced"  # off | conservative | balanced | aggressive
+    vrc_allow_population_raise: bool = False
+    vrc_experience_delay_seconds: float = 5.0
+    vrc_experience_max_raise: int = 15
+    vrc_experience_min_confidence: float = 0.60
     startup_scale: int = 0
     restore_on_exit: bool = True
 
@@ -272,6 +280,21 @@ class RuntimeConfig:
             raise ValueError("回退冷却必须在 0..300 秒")
         if not 50 <= self.up_gpu_limit_pct <= 100:
             raise ValueError("升档 GPU 占用上限必须在 50..100%")
+        if self.vrc_experience_mode not in {"off", "suggest", "auto"}:
+            raise ValueError("本地世界经验模式必须是 off、suggest 或 auto")
+        if self.vrc_population_compensation not in {
+            "off",
+            "conservative",
+            "balanced",
+            "aggressive",
+        }:
+            raise ValueError("人数补偿模式无效")
+        if not 0 <= self.vrc_experience_delay_seconds <= 60:
+            raise ValueError("本地世界经验等待时间必须在 0..60 秒")
+        if not 0 <= self.vrc_experience_max_raise <= 100:
+            raise ValueError("本地世界经验单次升档上限必须在 0..100")
+        if not 0.0 <= self.vrc_experience_min_confidence <= 1.0:
+            raise ValueError("本地世界经验最低置信度必须在 0..1")
         if self.startup_scale != 0 and not 20 <= self.startup_scale <= 500:
             raise ValueError("startup_scale 必须为 0 或 20..500")
         return self
@@ -476,6 +499,11 @@ class TelemetrySnapshot:
     vrc_profile_unsafe_scale: int
     vrc_profile_samples: int
     vrc_profile_confidence: float
+    vrc_experience_kind: str
+    vrc_experience_source_bucket: str
+    vrc_experience_target_scale: int
+    vrc_experience_confidence: float
+    vrc_experience_population_adjustment: int
     decision: Decision
     write_applied: bool
     write_count: int
@@ -536,6 +564,11 @@ class TelemetrySnapshot:
             "vrc_profile_unsafe_scale": self.vrc_profile_unsafe_scale,
             "vrc_profile_samples": self.vrc_profile_samples,
             "vrc_profile_confidence": self.vrc_profile_confidence,
+            "vrc_experience_kind": self.vrc_experience_kind,
+            "vrc_experience_source_bucket": self.vrc_experience_source_bucket,
+            "vrc_experience_target_scale": self.vrc_experience_target_scale,
+            "vrc_experience_confidence": self.vrc_experience_confidence,
+            "vrc_experience_population_adjustment": self.vrc_experience_population_adjustment,
             "decision": self.decision.action,
             "proposed_scale": self.decision.proposed_scale,
             "reason": self.decision.reason,
@@ -1077,6 +1110,8 @@ class AdaptiveRuntime:
         self.vrc_context_key = ""
         self.vrc_context_stable_since = 0.0
         self.vrc_profile_applied_key = ""
+        self.vrc_experience_cache_key = ""
+        self.vrc_experience_estimate: VrcProfileEstimate | None = None
         psutil.cpu_percent(interval=None)
 
     def emit(self, level: str, message: str | LocalizedMessage) -> None:
@@ -1091,6 +1126,20 @@ class AdaptiveRuntime:
         validated = config.validated()
         if validated.mode != self.config.mode:
             self.one_step_written = False
+        experience_changed = any(
+            getattr(validated, field) != getattr(self.config, field)
+            for field in (
+                "target_divisor",
+                "target_fps",
+                "vrc_population_compensation",
+                "vrc_allow_population_raise",
+                "vrc_experience_min_confidence",
+            )
+        )
+        if experience_changed:
+            self.vrc_experience_cache_key = ""
+            self.vrc_experience_estimate = None
+            self.vrc_profile_applied_key = ""
         refresh_hz = self.hardware_context.refresh_hz if self.hardware_context is not None else 0.0
         if refresh_hz > 1.0:
             old_target_fps, _old_budget = effective_frame_budget(
@@ -1241,6 +1290,8 @@ class AdaptiveRuntime:
             self.vrc_context_key = ""
             self.vrc_context_stable_since = 0.0
             self.vrc_profile_applied_key = ""
+            self.vrc_experience_cache_key = ""
+            self.vrc_experience_estimate = None
             return
         previous = self.vrc_context
         current = self.vrc_context_provider.poll(now)
@@ -1254,6 +1305,8 @@ class AdaptiveRuntime:
             self.vrc_context_key = basic_key
             self.vrc_context_stable_since = now
             self.vrc_profile_applied_key = ""
+            self.vrc_experience_cache_key = ""
+            self.vrc_experience_estimate = None
             if current.world_id:
                 state = (
                     f"{current.population} 人 · 人数档 {current.population_bucket}"
@@ -1263,6 +1316,112 @@ class AdaptiveRuntime:
                 self.emit("info", f"VRC 上下文 {current.world_short} · {state}")
         elif current.last_population_change_at > previous.last_population_change_at:
             self.vrc_context_stable_since = now
+
+    def _resolve_vrc_experience(
+        self,
+        cadence_key: str,
+    ) -> tuple[str, VrcProfileEstimate | None]:
+        if (
+            self.hardware_context is None
+            or not self.vrc_context.ready
+            or not self.vrc_context.world_id
+            or not self.vrc_context.population_bucket
+        ):
+            return "", None
+        cache_key = (
+            f"{self.vrc_context.world_id}|{self.vrc_context.population_bucket}|"
+            f"{cadence_key}|{self.config.vrc_population_compensation}|"
+            f"{int(self.config.vrc_allow_population_raise)}"
+        )
+        if cache_key != self.vrc_experience_cache_key:
+            self.vrc_experience_cache_key = cache_key
+            self.vrc_experience_estimate = self.vrc_profile_store.estimate(
+                self.hardware_context.hardware_id,
+                self.vrc_context.world_id,
+                self.vrc_context.population,
+                self.vrc_context.population_bucket,
+                cadence_key,
+                self.config.vrc_population_compensation,
+                self.config.vrc_allow_population_raise,
+            )
+            estimate = self.vrc_experience_estimate
+            if estimate is not None:
+                self.emit(
+                    "info",
+                    f"命中本地世界经验 · {estimate.source_bucket} · "
+                    f"{estimate.target_scale}% · 置信度 {estimate.confidence * 100:.0f}%",
+                )
+        return cache_key, self.vrc_experience_estimate
+
+    def _vrc_experience_decision(
+        self,
+        estimate: VrcProfileEstimate | None,
+        experience_key: str,
+        stats: WindowStats,
+        budget_ms: float,
+        system_gpu_pct: float | None,
+        now: float,
+    ) -> Decision | None:
+        if (
+            estimate is None
+            or self.config.vrc_experience_mode == "off"
+            or not self.vrc_context.ready
+            or experience_key == self.vrc_profile_applied_key
+            or now - self.vrc_context_stable_since
+            < self.config.vrc_experience_delay_seconds
+            or estimate.confidence < self.config.vrc_experience_min_confidence
+            or now < self.up_blocked_until
+        ):
+            return None
+        target = max(
+            self.config.min_scale,
+            min(self.config.max_scale, estimate.target_scale),
+        )
+        if estimate.unsafe_scale > 0:
+            target = min(target, estimate.unsafe_scale - 1)
+        if target > self.current_scale:
+            live_stable = (
+                stats.gpu_p95_ms <= budget_ms * self.config.gpu_raise_ratio
+                and stats.cpu_p95_ms <= budget_ms * self.config.cpu_raise_ratio
+                and stats.reprojection_pct == 0.0
+                and stats.dropped == 0
+            )
+            if not live_stable:
+                return None
+            target = min(
+                target,
+                self.current_scale + self.config.vrc_experience_max_raise,
+            )
+            if (
+                system_gpu_pct is not None
+                and system_gpu_pct >= self.config.up_gpu_limit_pct
+            ):
+                max_step = (
+                    GPU_SATURATED_SOFT_CAP_STEP
+                    if system_gpu_pct >= 98.0
+                    else GPU_SOFT_CAP_STEP
+                )
+                target = min(target, self.current_scale + max_step)
+        if target == self.current_scale:
+            self.vrc_profile_applied_key = experience_key
+            return None
+        kind_name = {
+            "exact": "精确人数档",
+            "interpolated": "相邻人数档插值",
+            "extrapolated": "人数经验偏移",
+        }.get(estimate.kind, "本地经验")
+        adjustment = (
+            ""
+            if estimate.population_adjustment == 0
+            else f" · 人数偏移 {estimate.population_adjustment:+d}%"
+        )
+        return Decision(
+            "up" if target > self.current_scale else "down",
+            target,
+            f"本地世界经验（{kind_name} {estimate.source_bucket}）"
+            f"建议 {target}%{adjustment} · "
+            f"置信度 {estimate.confidence * 100:.0f}%",
+        )
 
     def _vrc_profile_raise_decision(
         self,
@@ -1350,6 +1509,28 @@ class AdaptiveRuntime:
             return Decision("hold", self.current_scale, f"VRC 档案已记录 {unsafe_scale}% 出现压力，禁止继续升档")
         return Decision("up", target, f"{decision.reason}；受 VRC 历史压力上限 {unsafe_scale}% 限制")
 
+    def _cap_up_with_vrc_experience(
+        self,
+        decision: Decision,
+        estimate: VrcProfileEstimate | None,
+    ) -> Decision:
+        if decision.action != "up" or estimate is None or estimate.unsafe_scale <= 0:
+            return decision
+        if decision.proposed_scale < estimate.unsafe_scale:
+            return decision
+        target = max(self.current_scale, estimate.unsafe_scale - 1)
+        if target <= self.current_scale:
+            return Decision(
+                "hold",
+                self.current_scale,
+                f"本地世界经验记录 {estimate.unsafe_scale}% 出现压力，禁止继续升档",
+            )
+        return Decision(
+            "up",
+            target,
+            f"{decision.reason}；受本地历史压力上限 {estimate.unsafe_scale}% 限制",
+        )
+
     def _write_scale(
         self,
         target: int,
@@ -1357,6 +1538,7 @@ class AdaptiveRuntime:
         action: str = "manual",
         stats: WindowStats | None = None,
         system_gpu_pct: float | None = None,
+        source: str = "",
     ) -> None:
         if not self.current_app:
             raise RuntimeError("当前没有场景应用")
@@ -1383,6 +1565,7 @@ class AdaptiveRuntime:
                 pre_gpu_ms=stats.gpu_p95_ms if stats is not None else 0.0,
                 pre_frame_ms=stats.interval_p95_ms if stats is not None else 0.0,
                 pre_gpu_pct=system_gpu_pct,
+                source=source,
             )
         )
         self.emit("write", f"{self.current_app}: {old}% → {target}% · {reason}")
@@ -1498,6 +1681,25 @@ class AdaptiveRuntime:
         observation.rolled_back = True
         observation.complete = True
         self.up_blocked_until = now + self.config.up_rollback_cooldown_seconds
+        if (
+            observation.source == "vrc_experience"
+            and self.hardware_context is not None
+            and self.vrc_context.world_id
+            and self.vrc_context.population_bucket
+        ):
+            target_fps, _target_budget = effective_frame_budget(
+                self.hardware_context.refresh_hz,
+                self.config.target_fps,
+                self.config.target_divisor,
+            )
+            self.vrc_profile_store.record_unsafe(
+                self.hardware_context.hardware_id,
+                self.vrc_context.world_id,
+                self.vrc_context.population_bucket,
+                vrc_target_key(self.config.target_divisor, target_fps),
+                observation.to_scale,
+                now,
+            )
         return Decision(
             "rollback",
             observation.from_scale,
@@ -1508,6 +1710,24 @@ class AdaptiveRuntime:
         if not self.config.armed:
             raise PermissionError("写入锁尚未解锁")
         self._write_scale(target, "手动应用")
+
+    def forget_vrc_profiles(self, world_id: str | None = None) -> int:
+        if self.hardware_context is None:
+            raise RuntimeError("尚未取得当前硬件配置")
+        removed = self.vrc_profile_store.forget(
+            self.hardware_context.hardware_id,
+            world_id,
+        )
+        self.vrc_experience_cache_key = ""
+        self.vrc_experience_estimate = None
+        self.vrc_profile_applied_key = ""
+        scope = (
+            f"当前世界 {world_id.removeprefix('wrld_')[:8]}"
+            if world_id
+            else "当前硬件的全部世界"
+        )
+        self.emit("info", f"已忘记{scope}的本地经验 · {removed} 条")
+        return removed
 
     def experiment_set_scale(self, target: int, reason: str) -> None:
         if not self.config.armed:
@@ -1595,6 +1815,9 @@ class AdaptiveRuntime:
         )
         if guard_mode_before_evaluation == "recovering" and self.dashboard_guard.mode == "ready":
             self.emit("success", "Dashboard 切换后的统计窗口与帧节拍已稳定；恢复自适应分辨率")
+        vrc_experience_key, vrc_experience = self._resolve_vrc_experience(
+            cadence_key
+        )
         vrc_profile: dict[str, object] | None = None
         vrc_profile_key = ""
         if (
@@ -1629,26 +1852,44 @@ class AdaptiveRuntime:
                     stats.mispresented,
                     now,
                 )
+        if vrc_experience is not None and vrc_profile is not None:
+            current_unsafe = int(vrc_profile.get("unsafe_scale", 0))
+            if current_unsafe > 0 and (
+                vrc_experience.unsafe_scale <= 0
+                or current_unsafe < vrc_experience.unsafe_scale
+            ):
+                vrc_experience = replace(
+                    vrc_experience,
+                    unsafe_scale=current_unsafe,
+                    target_scale=min(
+                        vrc_experience.target_scale,
+                        current_unsafe - 1,
+                    ),
+                )
         if frozen_reason:
             decision_source = "dashboard"
             decision = Decision("hold", self.current_scale, frozen_reason)
         else:
             self._update_write_observations(stats, system_gpu_pct, now)
             rollback = self._rollback_decision(stats, budget_ms, now)
-            target_change_decision = None if rollback is not None else self._target_change_raise_decision(
-                stats,
-                target_fps,
-                budget_ms,
-                system_gpu_pct,
-                now,
-            )
-            vrc_profile_decision = (
+            vrc_experience_decision = (
                 None
-                if rollback is not None or target_change_decision is not None
-                else self._vrc_profile_raise_decision(
-                    vrc_profile,
-                    vrc_profile_key,
+                if rollback is not None
+                else self._vrc_experience_decision(
+                    vrc_experience,
+                    vrc_experience_key,
                     stats,
+                    budget_ms,
+                    system_gpu_pct,
+                    now,
+                )
+            )
+            target_change_decision = (
+                None
+                if rollback is not None or vrc_experience_decision is not None
+                else self._target_change_raise_decision(
+                    stats,
+                    target_fps,
                     budget_ms,
                     system_gpu_pct,
                     now,
@@ -1657,12 +1898,12 @@ class AdaptiveRuntime:
             if rollback is not None:
                 decision_source = "rollback"
                 decision = rollback
+            elif vrc_experience_decision is not None:
+                decision_source = "vrc_experience"
+                decision = vrc_experience_decision
             elif target_change_decision is not None:
                 decision_source = "target_change"
                 decision = target_change_decision
-            elif vrc_profile_decision is not None:
-                decision_source = "vrc_profile"
-                decision = vrc_profile_decision
             else:
                 decision_source = "controller"
                 decision = self.controller.decide(
@@ -1673,14 +1914,16 @@ class AdaptiveRuntime:
                     self.config,
                     system_gpu_pct,
                 )
-        decision = self._cap_up_with_vrc_profile(decision, vrc_profile)
+        if decision_source != "vrc_experience":
+            decision = self._cap_up_with_vrc_profile(decision, vrc_profile)
+        decision = self._cap_up_with_vrc_experience(decision, vrc_experience)
         if decision.action == "up" and now < self.up_blocked_until:
             remaining = self.up_blocked_until - now
             decision = Decision("hold", self.current_scale, f"升档回退冷却中，还剩 {remaining:.0f} 秒")
         write_applied = False
         write_cooldown = (
             0.0
-            if decision_source in {"target_change", "vrc_profile"}
+            if decision_source in {"target_change", "vrc_experience"}
             else action_cooldown_seconds(decision.action, self.config)
         )
         may_write = (
@@ -1690,6 +1933,13 @@ class AdaptiveRuntime:
             and decision.proposed_scale != self.current_scale
             and now - self.last_write >= write_cooldown
             and (self.config.mode == "continuous" or not self.one_step_written)
+            and (
+                decision_source != "vrc_experience"
+                or (
+                    self.config.vrc_experience_mode == "auto"
+                    and self.config.mode == "continuous"
+                )
+            )
         )
         if may_write:
             self._write_scale(
@@ -1698,11 +1948,12 @@ class AdaptiveRuntime:
                 decision.action,
                 stats,
                 system_gpu_pct,
+                decision_source,
             )
             if decision_source == "target_change":
                 self.pending_target_raise = None
-            elif decision_source == "vrc_profile":
-                self.vrc_profile_applied_key = vrc_profile_key
+            elif decision_source == "vrc_experience":
+                self.vrc_profile_applied_key = vrc_experience_key
             self.one_step_written = True
             write_applied = True
         elif decision.action == "hold" and decision_source == "target_change":
@@ -1755,6 +2006,21 @@ class AdaptiveRuntime:
             vrc_profile_unsafe_scale=int(vrc_profile.get("unsafe_scale", 0)) if vrc_profile else 0,
             vrc_profile_samples=int(vrc_profile.get("samples", 0)) if vrc_profile else 0,
             vrc_profile_confidence=VrcResolutionProfileStore.confidence(vrc_profile),
+            vrc_experience_kind=vrc_experience.kind if vrc_experience else "",
+            vrc_experience_source_bucket=(
+                vrc_experience.source_bucket if vrc_experience else ""
+            ),
+            vrc_experience_target_scale=(
+                vrc_experience.target_scale if vrc_experience else 0
+            ),
+            vrc_experience_confidence=(
+                vrc_experience.confidence if vrc_experience else 0.0
+            ),
+            vrc_experience_population_adjustment=(
+                vrc_experience.population_adjustment
+                if vrc_experience
+                else 0
+            ),
             decision=decision,
             write_applied=write_applied,
             write_count=self.write_count,

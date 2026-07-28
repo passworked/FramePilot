@@ -33,7 +33,7 @@
 <main>
   <header>
     <h1>FramePilot VR</h1>
-    <p class="lead">收件人快速开始 / Recipient Quick Start · Windows x64 · v0.13.4</p>
+    <p class="lead">收件人快速开始 / Recipient Quick Start · Windows x64 · v0.14.0</p>
     <div class="important"><strong>请先解压整个 ZIP。</strong>不要只复制 EXE，也不要直接在压缩包内运行。<br><strong>Extract the entire ZIP first.</strong> Do not copy only the EXE or run it from inside the archive.</div>
   </header>
 
@@ -59,6 +59,7 @@
         <li>若希望以后由 FramePilot VR 启动 SteamVR，勾选“启动 FramePilot VR 时自动启动 SteamVR”；保存后从下次启动生效。</li>
         <li>选择原生刷新率，或刷新率的 1/2、1/3、1/4；72 Hz 会自动对应 72/36/24/18 FPS 预算。</li>
         <li>Guide 最后一步还会默认勾选自动上传匿名聚合记录；不希望上传时取消勾选，之后也可在主面板随时关闭。</li>
+        <li>“本地世界经验”默认自动使用历史安全值；只在写入许可开启且使用“连续自适应”时应用，也可切换为“仅建议”或“关闭”。</li>
       </ol>
 
       <h2>3. 推荐使用顺序</h2>
@@ -77,6 +78,7 @@
         <li>部分游戏只有重启后才读取新的分辨率。</li>
         <li><b>刷新率分频只是动态分辨率预算，不是游戏限帧器。</b>实际帧率仍由游戏和 SteamVR 重投影决定。</li>
         <li>“分辨率调节范围与规则”不会被程序自行修改；自动变化的只有 SteamVR 分辨率。规则、单步、精确校准、策略迁移和手动设置位于高级模式。</li>
+        <li>本地世界经验按硬件、世界、人数档和刷新率分频匹配；精确档使用历史值，缺档时进行插值或人数偏移。应用后仍受观察、回退和历史压力上限保护。</li>
       </ul>
     </article>
 
@@ -101,6 +103,7 @@
         <li>To have FramePilot VR launch SteamVR in the future, enable “Start SteamVR automatically with FramePilot VR.” The saved option takes effect on the next launch.</li>
         <li>Select the native refresh rate or 1/2, 1/3, or 1/4 of it. At 72 Hz these become 72/36/24/18 FPS budgets automatically.</li>
         <li>The final Guide step also enables automatic upload of anonymous aggregates by default. Clear that checkbox to keep data local; it can also be changed later in the main panel.</li>
+        <li>“Local world experience” uses verified historical values by default. It only applies them when write permission and “Continuous adaptive” are enabled; “Suggestions only” and “Off” are also available.</li>
       </ol>
 
       <h2>3. Recommended workflow</h2>
@@ -119,6 +122,7 @@
         <li>Some games only read a new resolution after restarting.</li>
         <li><b>Refresh-rate division changes the dynamic-resolution budget; it is not a game frame limiter.</b> Actual frame rate still depends on the game and SteamVR reprojection.</li>
         <li>“Resolution adjustment range and rules” are not rewritten automatically; only SteamVR resolution changes. Rules, one-step mode, precise calibration, policy migration, and manual controls are under Advanced mode.</li>
+        <li>Local world experience matches hardware, world, population bucket, and refresh-rate target. Exact buckets use history; missing buckets use interpolation or a population offset, with observation, rollback, and historical pressure caps still enforced.</li>
       </ul>
     </article>
   </section>
@@ -134,6 +138,7 @@
       <ul>
         <li>运行日志：程序目录下的 <code>logs</code>。</li>
         <li>本机校准：<code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\strategy-store.json</code>。</li>
+        <li>本地世界经验：<code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\vrc-context-profiles.json</code>；可从面板忘记当前世界或清空全部经验，不影响匿名采集记录。</li>
         <li>匿名采集数据：<code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\shared-telemetry</code>；自动上传按 25 条或 15 分钟合并，限流或失败不会删除本地记录。</li>
       </ul>
       <h3>常见问题</h3>
@@ -155,6 +160,7 @@
       <ul>
         <li>Runtime logs: <code>logs</code> beside the application.</li>
         <li>Local calibration: <code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\strategy-store.json</code>.</li>
+        <li>Local world experience: <code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\vrc-context-profiles.json</code>. The panel can forget the current world or clear all experience without deleting anonymous collection records.</li>
         <li>Anonymous collection data: <code>%LOCALAPPDATA%\SteamVRAdaptiveResolution\shared-telemetry</code>. Automatic uploads batch 25 records or wait 15 minutes; rate limits and failures do not delete local records.</li>
       </ul>
       <h3>Common issues</h3>
