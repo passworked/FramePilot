@@ -164,6 +164,8 @@
   "ui.writes_allowed_one_step_and_manual_actions_may_change_resolution": "已允许写入 · 单步和手动操作可能修改分辨率",
   "ui.current_setting_is_below_the_configured_minimum": "当前设置低于配置下限",
   "ui.current_setting_is_above_the_configured_maximum": "当前设置高于配置上限",
+  "ui.coalesced_downshift": "合并降档",
+  "ui.to_reduce_steamvr_rebuilds": "以减少 SteamVR 重建次数",
   "ui.gpu_delivery_pressure_is_high_but_resolution_is_already_at_minim_9a5b039e": "GPU/交付压力高，但已到分辨率下限",
   "ui.gpu_frame_time_or_reprojection_exceeded_the_safety_threshold": "GPU 帧时间或重投影超过安全阈值",
   "ui.cpu_bound_lowering_resolution_is_usually_ineffective": "CPU 受限；降低分辨率通常无效",

@@ -37,8 +37,10 @@ STEAMVR_APPLICATION_KEY = "io.framepilot.vr.desktop"
 RESOLUTION_KEY = "resolutionScale"
 CREATE_NO_WINDOW = 0x08000000 if os.name == "nt" else 0
 STRATEGY_SCHEMA_VERSION = 1
-DOWN_WRITE_INTERVAL_SECONDS = 0.25
 WRITE_RECOVERY_SECONDS = 5.0
+DOWN_WRITE_SETTLE_SECONDS = WRITE_RECOVERY_SECONDS
+DOWN_COALESCED_STEP = 5
+DOWN_SATURATED_STEP = 10
 TARGET_CHANGE_PROBE_RATIO = 0.85
 TARGET_CHANGE_PROBE_MAX_SCALE = 150
 TARGET_CHANGE_CADENCE_SECONDS = 0.75
@@ -651,7 +653,35 @@ def application_framerate(samples: list[FrameSample], refresh_hz: float) -> floa
 def action_cooldown_seconds(action: str, config: RuntimeConfig) -> float:
     if action == "rollback":
         return 0.0
-    return DOWN_WRITE_INTERVAL_SECONDS if action == "down" else config.cooldown_seconds
+    return (
+        max(DOWN_WRITE_SETTLE_SECONDS, config.cooldown_seconds)
+        if action == "down"
+        else config.cooldown_seconds
+    )
+
+
+def coalesced_down_step(
+    stats: WindowStats,
+    budget_ms: float,
+    config: RuntimeConfig,
+    system_gpu_pct: float | None = None,
+) -> int:
+    """Combine severe pressure into one useful downshift instead of many writes."""
+    pressure_ratio = stats.gpu_p95_ms / max(budget_ms, 0.1)
+    delivery_severe = (
+        stats.interval_p95_ms >= budget_ms * 1.50
+        or stats.reprojection_pct >= 10.0
+        or stats.dropped >= 2
+    )
+    saturated = (
+        (system_gpu_pct is not None and system_gpu_pct >= 98.0)
+        and pressure_ratio >= 1.15
+    )
+    if pressure_ratio >= 1.75 or saturated:
+        return max(config.step_down, DOWN_SATURATED_STEP)
+    if pressure_ratio >= 1.25 or delivery_severe:
+        return max(config.step_down, DOWN_COALESCED_STEP)
+    return config.step_down
 
 
 def summarize(samples: list[FrameSample]) -> WindowStats:
@@ -684,8 +714,15 @@ class AdaptiveController:
         system_gpu_pct: float | None = None,
     ) -> Decision:
         if scale > config.max_scale:
-            target = max(config.max_scale, scale - config.step_down)
-            return Decision("down", target, "当前设置高于配置上限，逐步回落")
+            target = max(
+                config.max_scale,
+                scale - max(config.step_down, DOWN_COALESCED_STEP),
+            )
+            return Decision(
+                "down",
+                target,
+                "当前设置高于配置上限; 合并降档以减少 SteamVR 重建次数",
+            )
 
         gpu_over = stats.gpu_p95_ms >= budget_ms * config.gpu_down_ratio
         cpu_over = stats.cpu_p95_ms >= budget_ms * 0.92
@@ -697,10 +734,23 @@ class AdaptiveController:
 
         if gpu_over or (delivery_bad and stats.gpu_p95_ms >= budget_ms * 0.80):
             self.stable_since = None
-            target = max(config.min_scale, scale - config.step_down) if scale >= config.min_scale else scale
+            step = coalesced_down_step(
+                stats,
+                budget_ms,
+                config,
+                system_gpu_pct,
+            )
+            target = (
+                max(config.min_scale, scale - step)
+                if scale >= config.min_scale
+                else scale
+            )
             if target >= scale:
                 return Decision("hold", scale, "GPU/交付压力高，但已到分辨率下限")
-            return Decision("down", target, "GPU 帧时间或重投影超过安全阈值")
+            reason = "GPU 帧时间或重投影超过安全阈值"
+            if step > config.step_down:
+                reason += f"; 合并降档 {step}% 以减少 SteamVR 重建次数"
+            return Decision("down", target, reason)
 
         if cpu_over and stats.gpu_p95_ms < budget_ms * 0.80:
             self.stable_since = None
@@ -1981,7 +2031,10 @@ class AdaptiveRuntime:
         write_applied = False
         write_cooldown = (
             0.0
-            if decision_source in {"target_change", "vrc_experience"}
+            if (
+                decision.action == "up"
+                and decision_source in {"target_change", "vrc_experience"}
+            )
             else action_cooldown_seconds(decision.action, self.config)
         )
         may_write = (
@@ -2220,7 +2273,10 @@ def run_self_test() -> int:
         replace(config, raise_stable_seconds=0.0),
     )
     assert predicted_30fps.action == "up" and predicted_30fps.proposed_scale == 105
-    assert action_cooldown_seconds("down", config) == 0.25
+    assert action_cooldown_seconds("down", config) == max(
+        WRITE_RECOVERY_SECONDS,
+        config.cooldown_seconds,
+    )
     assert action_cooldown_seconds("up", config) == config.cooldown_seconds
     assert action_cooldown_seconds("rollback", config) == 0.0
 

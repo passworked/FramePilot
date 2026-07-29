@@ -164,6 +164,8 @@
   "ui.writes_allowed_one_step_and_manual_actions_may_change_resolution": "Schreibvorgänge zulässig · Einzelschritt- und manuelle Vorgänge können die Auflösung ändern",
   "ui.current_setting_is_below_the_configured_minimum": "Die aktuelle Einstellung liegt unterhalb der unteren Konfigurationsgrenze",
   "ui.current_setting_is_above_the_configured_maximum": "Die aktuelle Einstellung liegt über dem Konfigurationslimit",
+  "ui.coalesced_downshift": "Gebündelte Absenkung",
+  "ui.to_reduce_steamvr_rebuilds": "um SteamVR-Neuaufbauten zu reduzieren",
   "ui.gpu_delivery_pressure_is_high_but_resolution_is_already_at_minim_9a5b039e": "Hoher GPU-/Lieferdruck, aber die untere Auflösungsgrenze ist erreicht",
   "ui.gpu_frame_time_or_reprojection_exceeded_the_safety_threshold": "Die GPU-Framezeit oder Neuprojektion überschreitet den Sicherheitsschwellenwert",
   "ui.cpu_bound_lowering_resolution_is_usually_ineffective": "CPU begrenzt; Eine Verringerung der Auflösung hat normalerweise keine Auswirkung",

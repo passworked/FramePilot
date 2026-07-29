@@ -125,6 +125,27 @@ class LocalizationCatalogTests(unittest.TestCase):
                 if language != "ja":
                     self.assertIsNone(re.search(r"[\u3400-\u9fff]", translated))
 
+    def test_coalesced_downshift_reason_is_localized(self) -> None:
+        localizer = Localizer(ROOT / "locales")
+        message = (
+            "GPU 帧时间或重投影超过安全阈值; "
+            "合并降档 10% 以减少 SteamVR 重建次数"
+        )
+
+        self.assertEqual(
+            localizer.localize_message(message, "en"),
+            "GPU frame time or reprojection exceeded the safety threshold; "
+            "Coalesced downshift 10% to reduce SteamVR rebuilds",
+        )
+        for language, _label in LANGUAGE_OPTIONS:
+            if language == "zh":
+                continue
+            with self.subTest(language=language):
+                translated = localizer.localize_message(message, language)
+                self.assertNotIn("GPU 帧时间或重投影超过安全阈值", translated)
+                self.assertNotIn("合并降档", translated)
+                self.assertNotIn("以减少 SteamVR 重建次数", translated)
+
 
 if __name__ == "__main__":
     unittest.main()

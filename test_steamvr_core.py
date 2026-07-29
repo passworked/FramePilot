@@ -11,6 +11,7 @@ from framepilot_i18n import LocalizedMessage
 from steamvr_core import (
     AdaptiveController,
     AdaptiveRuntime,
+    DOWN_WRITE_SETTLE_SECONDS,
     FrameSample,
     HardwareContext,
     RuntimeConfig,
@@ -155,7 +156,7 @@ class DashboardVisibilityTests(unittest.TestCase):
         assert recovered is not None
         self.assertEqual(recovered.adaptive_frozen_reason, "")
         self.assertTrue(recovered.write_applied)
-        self.assertEqual(session.scale_writes, [99])
+        self.assertEqual(session.scale_writes, [95])
 
     def test_dashboard_read_failure_uses_fail_safe_freeze(self) -> None:
         session = _DashboardSession(None)
@@ -174,7 +175,7 @@ class DashboardVisibilityTests(unittest.TestCase):
         self.assertIsNotNone(snapshot)
         assert snapshot is not None
         self.assertTrue(snapshot.write_applied)
-        self.assertEqual(session.scale_writes, [99])
+        self.assertEqual(session.scale_writes, [95])
 
     def test_openvr_reader_reports_visible_and_read_errors(self) -> None:
         class Overlay:
@@ -536,6 +537,99 @@ class RecoveryPolicyTests(unittest.TestCase):
                 suggestion_snapshot.decision.proposed_scale,
                 100,
             )
+
+
+class DownshiftWritePolicyTests(unittest.TestCase):
+    @staticmethod
+    def runtime() -> tuple[AdaptiveRuntime, _SessionBase]:
+        session = _SessionBase()
+        runtime = AdaptiveRuntime(
+            RuntimeConfig(
+                mode="continuous",
+                armed=True,
+                target_divisor=2,
+                window_seconds=1.0,
+                evaluate_seconds=0.1,
+                cooldown_seconds=0.0,
+            )
+        )
+        runtime.session = session  # type: ignore[assignment]
+        runtime.gpu_sampler = _GpuSampler()  # type: ignore[assignment]
+        runtime.connected = True
+        return runtime, session
+
+    @staticmethod
+    def poll(runtime: AdaptiveRuntime, now: float):
+        with (
+            patch("steamvr_core.process_running", return_value=True),
+            patch("steamvr_core.time.monotonic", return_value=now),
+        ):
+            return runtime.poll(now)
+
+    def test_severe_pressure_is_coalesced_into_five_percent_write(self) -> None:
+        runtime, session = self.runtime()
+
+        snapshot = self.poll(runtime, 1.0)
+
+        self.assertIsNotNone(snapshot)
+        assert snapshot is not None
+        self.assertTrue(snapshot.write_applied)
+        self.assertEqual(snapshot.decision.proposed_scale, 95)
+        self.assertIn("合并降档 5%", snapshot.decision.reason)
+        self.assertEqual(session.scale_writes, [95])
+
+    def test_saturated_gpu_is_coalesced_into_ten_percent_write(self) -> None:
+        controller = AdaptiveController()
+        config = RuntimeConfig(
+            min_scale=30,
+            max_scale=150,
+            step_down=1,
+            target_divisor=2,
+        )
+        stats = WindowStats(
+            frames=72,
+            gpu_p50_ms=35.0,
+            gpu_p95_ms=44.0,
+            cpu_p95_ms=8.0,
+            interval_p95_ms=38.0,
+            reprojection_pct=0.0,
+            dropped=0,
+            mispresented=0,
+        )
+
+        decision = controller.decide(
+            stats,
+            1000.0 / 36.0,
+            100,
+            1.0,
+            config,
+            99.0,
+        )
+
+        self.assertEqual(decision.action, "down")
+        self.assertEqual(decision.proposed_scale, 90)
+        self.assertIn("合并降档 10%", decision.reason)
+
+    def test_post_write_pressure_waits_for_full_recovery_window(self) -> None:
+        runtime, session = self.runtime()
+        first = self.poll(runtime, 1.0)
+        during_settle = self.poll(
+            runtime,
+            1.0 + DOWN_WRITE_SETTLE_SECONDS - 0.1,
+        )
+        after_settle = self.poll(
+            runtime,
+            1.0 + DOWN_WRITE_SETTLE_SECONDS + 0.1,
+        )
+
+        self.assertIsNotNone(first)
+        self.assertIsNotNone(during_settle)
+        self.assertIsNotNone(after_settle)
+        assert during_settle is not None and after_settle is not None
+        self.assertFalse(during_settle.write_applied)
+        self.assertEqual(session.scale_writes[:1], [95])
+        self.assertTrue(after_settle.write_applied)
+        self.assertEqual(session.scale_writes, [95, 90])
 
 
 if __name__ == "__main__":

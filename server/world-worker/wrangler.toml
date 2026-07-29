@@ -5,7 +5,7 @@ workers_dev = true
 
 [vars]
 ORIGIN_URL = "https://origin-ingest.passworked.com"
-VRC_USER_AGENT = "FramePilotVR/0.14.1 https://github.com/passworked/FramePilot"
+VRC_USER_AGENT = "FramePilotVR/0.14.2 https://github.com/passworked/FramePilot"
 
 # Never put ORIGIN_AUTH_SECRET in this file. Configure it with:
 # npx wrangler secret put ORIGIN_AUTH_SECRET

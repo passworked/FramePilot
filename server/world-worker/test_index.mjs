@@ -8,7 +8,7 @@ const WORLD_ID = "wrld_11111111-1111-1111-1111-111111111111";
 const ENV = {
   ORIGIN_URL: "https://origin-ingest.example.com",
   ORIGIN_AUTH_SECRET: "s".repeat(64),
-  VRC_USER_AGENT: "FramePilotVR/0.14.1 https://github.com/passworked/FramePilot",
+  VRC_USER_AGENT: "FramePilotVR/0.14.2 https://github.com/passworked/FramePilot",
 };
 
 function worldPayload() {

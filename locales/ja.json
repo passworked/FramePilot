@@ -164,6 +164,8 @@
   "ui.writes_allowed_one_step_and_manual_actions_may_change_resolution": "書き込みが許可されています · シングルステップおよび手動操作により解像度が変更される可能性があります",
   "ui.current_setting_is_below_the_configured_minimum": "現在の設定は構成の下限を下回っています",
   "ui.current_setting_is_above_the_configured_maximum": "現在の設定が構成制限を超えています",
+  "ui.coalesced_downshift": "降格を統合",
+  "ui.to_reduce_steamvr_rebuilds": "SteamVR の再構築回数を減らすため",
   "ui.gpu_delivery_pressure_is_high_but_resolution_is_already_at_minim_9a5b039e": "GPU/配信プレッシャーは高いが、解像度の下限に達している",
   "ui.gpu_frame_time_or_reprojection_exceeded_the_safety_threshold": "GPU フレーム時間または再投影が安全しきい値を超えています",
   "ui.cpu_bound_lowering_resolution_is_usually_ineffective": "CPU が制限されています。通常、解像度を下げても効果はありません",

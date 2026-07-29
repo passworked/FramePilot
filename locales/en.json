@@ -164,6 +164,8 @@
   "ui.writes_allowed_one_step_and_manual_actions_may_change_resolution": "WRITES ALLOWED · One-step and manual actions may change resolution",
   "ui.current_setting_is_below_the_configured_minimum": "Current setting is below the configured minimum",
   "ui.current_setting_is_above_the_configured_maximum": "Current setting is above the configured maximum",
+  "ui.coalesced_downshift": "Coalesced downshift",
+  "ui.to_reduce_steamvr_rebuilds": "to reduce SteamVR rebuilds",
   "ui.gpu_delivery_pressure_is_high_but_resolution_is_already_at_minim_9a5b039e": "GPU/delivery pressure is high, but resolution is already at minimum",
   "ui.gpu_frame_time_or_reprojection_exceeded_the_safety_threshold": "GPU frame time or reprojection exceeded the safety threshold",
   "ui.cpu_bound_lowering_resolution_is_usually_ineffective": "CPU-bound; lowering resolution is usually ineffective",

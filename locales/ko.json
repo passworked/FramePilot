@@ -164,6 +164,8 @@
   "ui.writes_allowed_one_step_and_manual_actions_may_change_resolution": "쓰기 허용됨 · 단일 단계 및 수동 동작이 해상도를 변경할 수 있음",
   "ui.current_setting_is_below_the_configured_minimum": "현재 설정이 구성된 최솟값보다 낮습니다",
   "ui.current_setting_is_above_the_configured_maximum": "현재 설정이 구성된 최댓값보다 높습니다",
+  "ui.coalesced_downshift": "통합 하향 조정",
+  "ui.to_reduce_steamvr_rebuilds": "SteamVR 재구축 횟수를 줄이기 위해",
   "ui.gpu_delivery_pressure_is_high_but_resolution_is_already_at_minim_9a5b039e": "GPU/전달 부하가 높지만 이미 최소 해상도입니다",
   "ui.gpu_frame_time_or_reprojection_exceeded_the_safety_threshold": "GPU 프레임 시간 또는 재투영이 안전 임계값을 초과합니다.",
   "ui.cpu_bound_lowering_resolution_is_usually_ineffective": "CPU 제한 상태입니다. 해상도를 낮춰도 대개 효과가 없습니다",
