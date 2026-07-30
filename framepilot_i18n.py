@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass, field
 from pathlib import Path
 import sys
@@ -16,6 +17,14 @@ LANGUAGE_OPTIONS = (
     ("es", "Español"),
 )
 SUPPORTED_LANGUAGES = frozenset(code for code, _label in LANGUAGE_OPTIONS)
+
+# Glyphs that are specific to simplified Chinese rather than normal Japanese
+# kanji. This is intentionally conservative: it is used only as a last-resort
+# guard for legacy runtime messages that have not yet moved to semantic keys.
+_SIMPLIFIED_CHINESE_ONLY = re.compile(
+    r"[个为与后发帧还载务录处认验证议档过户设备请仅时开启关闭选择从对应"
+    r"统计窗稳复显隐总条达则进续传场优级线阶写读锁删动项边压异码层]"
+)
 
 
 @dataclass(frozen=True)
@@ -105,6 +114,23 @@ class Localizer:
         for key, source in sources:
             if source and source in output:
                 output = output.replace(source, catalog.get(key, source))
+        # Legacy runtime strings can be composed from several fragments. If a
+        # fragment is missing from the catalog, partial replacement produces a
+        # visibly mixed-language event. Prefer a fully localized diagnostic
+        # over leaking Chinese into another language.
+        has_residual_chinese = (
+            _SIMPLIFIED_CHINESE_ONLY.search(output) is not None
+            if language == "ja"
+            else re.search(r"[\u3400-\u9fff]", output) is not None
+        )
+        if has_residual_chinese:
+            return catalog.get(
+                "event.runtime_message_translation_incomplete",
+                self.catalogs["en"].get(
+                    "event.runtime_message_translation_incomplete",
+                    "Runtime message translation incomplete",
+                ),
+            )
         return output
 
     def missing_keys(self, language: str) -> set[str]:

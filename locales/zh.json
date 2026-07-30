@@ -285,5 +285,10 @@
   "ui.register_with_steamvr_startup": "注册到 SteamVR 启动项；从下次启动 SteamVR 起生效。",
   "event.framepilot_steamvr_autolaunch_enabled": "已启用：SteamVR 启动时自动启动 FramePilot VR",
   "event.framepilot_steamvr_autolaunch_disabled": "已关闭：SteamVR 不再自动启动 FramePilot VR",
-  "event.framepilot_steamvr_autolaunch_failed": "无法更新 SteamVR 的 FramePilot VR 自动启动项：{detail}"
+  "event.framepilot_steamvr_autolaunch_failed": "无法更新 SteamVR 的 FramePilot VR 自动启动项：{detail}",
+  "event.dashboard_visible": "SteamVR Dashboard/桌面面板已显示；冻结自适应分辨率",
+  "event.dashboard_status_unavailable": "SteamVR Dashboard 状态读取失败；冻结自适应分辨率",
+  "event.dashboard_recovering": "SteamVR Dashboard 已隐藏；等待新统计窗口与帧节拍稳定",
+  "event.dashboard_recovered": "Dashboard 切换后的统计窗口与帧节拍已稳定；恢复自适应分辨率",
+  "event.runtime_message_translation_incomplete": "运行时消息翻译不完整，请查看应用日志了解详情。"
 }

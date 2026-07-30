@@ -1386,11 +1386,11 @@ class AdaptiveRuntime:
         if previous == current:
             return
         if current == "visible":
-            self.emit("info", "SteamVR Dashboard/桌面面板已显示；冻结自适应分辨率")
+            self.emit("info", LocalizedMessage("event.dashboard_visible"))
         elif current == "unavailable":
-            self.emit("warning", "SteamVR Dashboard 状态读取失败；冻结自适应分辨率")
+            self.emit("warning", LocalizedMessage("event.dashboard_status_unavailable"))
         elif current == "recovering":
-            self.emit("info", "SteamVR Dashboard 已隐藏；等待新统计窗口与帧节拍稳定")
+            self.emit("info", LocalizedMessage("event.dashboard_recovering"))
 
     def _update_vrc_context(self, app_key: str, now: float) -> None:
         if app_key.casefold() != "steam.app.438100":
@@ -1922,7 +1922,7 @@ class AdaptiveRuntime:
             self.config.window_seconds,
         )
         if guard_mode_before_evaluation == "recovering" and self.dashboard_guard.mode == "ready":
-            self.emit("success", "Dashboard 切换后的统计窗口与帧节拍已稳定；恢复自适应分辨率")
+            self.emit("success", LocalizedMessage("event.dashboard_recovered"))
         vrc_experience_key, vrc_experience = self._resolve_vrc_experience(
             cadence_key
         )

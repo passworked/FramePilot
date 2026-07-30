@@ -242,7 +242,7 @@
   "ui.started_anonymous_sharing_data_upload": "匿名の共有データのアップロードを開始する",
   "format.upload_is_temporarily_delayed_local_records_are_safe_retrying_in_77478b6e": "アップロードは一時的に制限されており、ローカル記録は安全に保たれます。約 {minutes} 分後にもう一度お試しください。",
   "ui.no_new_records_need_uploading": "アップロードする新しいレコードはありません。",
-  "format.upload_complete_accepted_accepted_duplicates_duplicate_record_s_9f34a9df": "アップロードが完了しました: サーバーは {accepted} 個のアイテムと {duplicates} 個のアイテム、合計 {batches} 個のバッチを受信しました。",
+  "format.upload_complete_accepted_accepted_duplicates_duplicate_record_s_9f34a9df": "アップロード完了：{accepted} 件を受信し、{duplicates} 件は重複していました（全 {batches} バッチ）。",
   "message.some_records_remain_click_upload_again_to_continue": "アップロードされていないレコードがまだあります。続行するには、もう一度「共有データのアップロード」をクリックしてください。",
   "ui.thresholds_steps_and_timing_windows_were_exported_the_hardware_f_a2225d55": "しきい値、ステップ、および時間ウィンドウがエクスポートされます。ハードウェアのフィンガープリントとネイティブの最終解像度はエクスポートされません。",
   "ui.policy_imported_in_read_only_mode_run_local_calibration_before_a_e74422d7": "ポリシーが移行されました。現在は読み取り専用のままです。キャリブレーションをネイティブに実行した後、解像度範囲を採用してください。",
@@ -285,5 +285,10 @@
   "ui.register_with_steamvr_startup": "SteamVRのスタートアップに登録し、次回のSteamVR起動時から有効になります。",
   "event.framepilot_steamvr_autolaunch_enabled": "有効：SteamVR起動時にFramePilot VRを起動します",
   "event.framepilot_steamvr_autolaunch_disabled": "無効：SteamVRはFramePilot VRを自動起動しません",
-  "event.framepilot_steamvr_autolaunch_failed": "FramePilot VRのSteamVRスタートアップ設定を更新できません：{detail}"
+  "event.framepilot_steamvr_autolaunch_failed": "FramePilot VRのSteamVRスタートアップ設定を更新できません：{detail}",
+  "event.dashboard_visible": "SteamVR Dashboard が表示されたため、自動解像度調整を一時停止しました",
+  "event.dashboard_status_unavailable": "SteamVR Dashboard の状態を取得できないため、自動解像度調整を一時停止しました",
+  "event.dashboard_recovering": "SteamVR Dashboard が閉じられました。新しい統計データとフレーム周期が安定するまで待機します",
+  "event.dashboard_recovered": "Dashboard 切り替え後の統計データとフレーム周期が安定したため、自動解像度調整を再開しました",
+  "event.runtime_message_translation_incomplete": "実行時イベントを完全に翻訳できませんでした。詳細はアプリケーションログを確認してください。"
 }

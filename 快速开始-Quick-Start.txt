@@ -1,4 +1,4 @@
-FramePilot VR v0.14.2
+FramePilot VR v0.14.3
 快速开始 / QUICK START
 ========================================
 
@@ -33,7 +33,7 @@ FramePilot VR v0.14.2
 - 写入许可默认关闭；手动勾选或取消后都会缓存。正常退出时面板仍会强制恢复启动值。
 - 刷新率分频只改变动态分辨率帧预算，不是游戏限帧器；实际帧率由游戏和 SteamVR 重投影决定。
 - “分辨率调节范围与规则”中的数值不会被程序自行修改；自动变化的只有 SteamVR 分辨率。普通模式只显示预设、只读/连续、刷新率分频、写入许可和只读校准；规则、单步、精确校准、策略迁移及手动设置在高级模式。
-- v0.14.2 会把严重 GPU 压力合并为一次 5%/10% 降档，并在每次降档后等待完整恢复窗口，避免连续重建 SteamVR 渲染目标造成卡顿。
+- v0.14.3 修复非中文界面的运行时事件混入中文片段，并改进日语上传汇总措辞；严重 GPU 压力仍会合并降档并等待完整恢复窗口。
 - 日志在程序目录的 logs 文件夹。
 - 本机校准在 %LOCALAPPDATA%\SteamVRAdaptiveResolution\strategy-store.json。
 - 本地世界经验在 %LOCALAPPDATA%\SteamVRAdaptiveResolution\vrc-context-profiles.json；按硬件、世界、人数档和刷新率分频匹配。精确档命中历史值，缺档时使用相邻档插值或人数偏移；可在面板忘记当前世界或清空全部经验。
@@ -73,7 +73,7 @@ Safety and files
 - Write permission is off by default; manual enable/disable choices are cached. The panel still restores the startup value on a normal exit.
 - Refresh-rate division changes the dynamic-resolution budget; it is not a game FPS limiter. Actual frame rate depends on the game and SteamVR reprojection.
 - Values under “Resolution adjustment range and rules” are not rewritten automatically; only SteamVR resolution changes. Basic mode shows presets, read-only/continuous mode, cadence, write permission, and read-only calibration. Rules, one-step mode, precise calibration, policy migration, and manual controls are in Advanced mode.
-- v0.14.2 coalesces severe GPU pressure into one 5%/10% downshift and waits for a full recovery window after each write, avoiding repeated SteamVR render-target rebuilds.
+- v0.14.3 prevents Chinese fragments from leaking into runtime events in non-Chinese interfaces and improves the Japanese upload summary; severe GPU pressure remains coalesced with a full recovery window.
 - Logs are stored in the logs folder beside the program.
 - Local calibration is stored at %LOCALAPPDATA%\SteamVRAdaptiveResolution\strategy-store.json.
 - Local world experience is stored at %LOCALAPPDATA%\SteamVRAdaptiveResolution\vrc-context-profiles.json and matched by hardware, world, population bucket, and refresh-rate target. Exact buckets use history; missing buckets use interpolation or a population offset. The panel can forget the current world or clear all experience.

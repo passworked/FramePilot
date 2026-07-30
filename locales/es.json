@@ -285,5 +285,10 @@
   "ui.register_with_steamvr_startup": "Se registra en el inicio de SteamVR y se aplica la próxima vez que SteamVR arranque.",
   "event.framepilot_steamvr_autolaunch_enabled": "Activado: SteamVR iniciará FramePilot VR al arrancar",
   "event.framepilot_steamvr_autolaunch_disabled": "Desactivado: SteamVR ya no iniciará FramePilot VR",
-  "event.framepilot_steamvr_autolaunch_failed": "No se pudo actualizar el inicio de FramePilot VR en SteamVR: {detail}"
+  "event.framepilot_steamvr_autolaunch_failed": "No se pudo actualizar el inicio de FramePilot VR en SteamVR: {detail}",
+  "event.dashboard_visible": "El panel de SteamVR está visible; se pausó la resolución adaptativa",
+  "event.dashboard_status_unavailable": "No se pudo leer el estado del panel de SteamVR; se pausó la resolución adaptativa",
+  "event.dashboard_recovering": "El panel de SteamVR está oculto; esperando estadísticas nuevas y una cadencia de fotogramas estable",
+  "event.dashboard_recovered": "Las estadísticas y la cadencia se estabilizaron tras cambiar el panel; se reanudó la resolución adaptativa",
+  "event.runtime_message_translation_incomplete": "No se pudo traducir por completo un evento de ejecución. Consulta el registro de la aplicación."
 }

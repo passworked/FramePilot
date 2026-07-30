@@ -141,7 +141,7 @@ class ProductionUiTests(unittest.TestCase):
                 result = main()
 
             self.assertEqual(result, 0)
-            self.assertEqual(output.read_text(encoding="utf-8"), "0.14.2")
+            self.assertEqual(output.read_text(encoding="utf-8"), "0.14.3")
 
 
 if __name__ == "__main__":

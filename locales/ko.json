@@ -285,5 +285,10 @@
   "ui.register_with_steamvr_startup": "SteamVR 시작 항목에 등록되며 다음 SteamVR 실행부터 적용됩니다.",
   "event.framepilot_steamvr_autolaunch_enabled": "활성화됨: SteamVR 시작 시 FramePilot VR을 실행합니다",
   "event.framepilot_steamvr_autolaunch_disabled": "비활성화됨: SteamVR이 FramePilot VR을 자동 실행하지 않습니다",
-  "event.framepilot_steamvr_autolaunch_failed": "FramePilot VR의 SteamVR 시작 항목을 업데이트할 수 없습니다: {detail}"
+  "event.framepilot_steamvr_autolaunch_failed": "FramePilot VR의 SteamVR 시작 항목을 업데이트할 수 없습니다: {detail}",
+  "event.dashboard_visible": "SteamVR Dashboard가 표시되어 적응형 해상도를 일시 중지했습니다",
+  "event.dashboard_status_unavailable": "SteamVR Dashboard 상태를 읽을 수 없어 적응형 해상도를 일시 중지했습니다",
+  "event.dashboard_recovering": "SteamVR Dashboard가 닫혔습니다. 새 통계 구간과 프레임 주기가 안정될 때까지 기다립니다",
+  "event.dashboard_recovered": "Dashboard 전환 후 통계와 프레임 주기가 안정되어 적응형 해상도를 다시 시작했습니다",
+  "event.runtime_message_translation_incomplete": "런타임 이벤트를 완전히 번역하지 못했습니다. 자세한 내용은 애플리케이션 로그를 확인하세요."
 }

@@ -146,6 +146,85 @@ class LocalizationCatalogTests(unittest.TestCase):
                 self.assertNotIn("合并降档", translated)
                 self.assertNotIn("以减少 SteamVR 重建次数", translated)
 
+    def test_dashboard_events_are_semantic_and_fully_localized(self) -> None:
+        localizer = Localizer(ROOT / "locales")
+        keys = (
+            "event.dashboard_visible",
+            "event.dashboard_status_unavailable",
+            "event.dashboard_recovering",
+            "event.dashboard_recovered",
+        )
+        simplified_only = re.compile(
+            r"[个为与后发帧还载务录处认验证议档过户设备请仅时开启关闭"
+            r"选择从对应统计窗稳复显隐总条达则进续传场优级线阶写读锁"
+            r"删动项边压异码层]"
+        )
+        for language, _label in LANGUAGE_OPTIONS:
+            if language == "zh":
+                continue
+            for key in keys:
+                with self.subTest(language=language, key=key):
+                    translated = localizer.localize_message(
+                        LocalizedMessage(key),
+                        language,
+                    )
+                    self.assertNotEqual(
+                        translated,
+                        localizer.translate(
+                            "event.runtime_message_translation_incomplete",
+                            language,
+                        ),
+                    )
+                    if language == "ja":
+                        self.assertIsNone(simplified_only.search(translated))
+                    else:
+                        self.assertIsNone(
+                            re.search(r"[\u3400-\u9fff]", translated)
+                        )
+
+    def test_legacy_runtime_messages_never_leak_chinese_fragments(self) -> None:
+        localizer = Localizer(ROOT / "locales")
+        legacy = (
+            "Dashboard 切换后的统计窗口与帧节拍已稳定；恢复自适应分辨率",
+            "A/B 测试已取消: 场景应用发生变化",
+            "VR 参数叠加层异常退出，代码 3",
+        )
+        for language, _label in LANGUAGE_OPTIONS:
+            if language == "zh":
+                continue
+            for message in legacy:
+                with self.subTest(language=language, message=message):
+                    translated = localizer.localize_message(message, language)
+                    if language == "ja":
+                        self.assertIsNone(
+                            re.search(
+                                r"[个为与后发帧还载务录处认验证议档过户设备请仅时"
+                                r"开启关闭选择从对应统计窗稳复显隐总条达则进续传场"
+                                r"优级线阶写读锁删动项边压异码层]",
+                                translated,
+                            )
+                        )
+                    else:
+                        self.assertIsNone(
+                            re.search(r"[\u3400-\u9fff]", translated)
+                        )
+
+    def test_japanese_upload_summary_uses_natural_record_counters(self) -> None:
+        localizer = Localizer(ROOT / "locales")
+        translated = localizer.format(
+            "format.upload_complete_accepted_accepted_duplicates_duplicate_record_s_9f34a9df",
+            "ja",
+            accepted=16,
+            duplicates=0,
+            batches=1,
+        )
+        self.assertEqual(
+            translated,
+            "アップロード完了：16 件を受信し、0 件は重複していました"
+            "（全 1 バッチ）。",
+        )
+        self.assertNotIn("個のアイテム", translated)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -285,5 +285,10 @@
   "ui.register_with_steamvr_startup": "Registers with SteamVR startup; takes effect the next time SteamVR starts.",
   "event.framepilot_steamvr_autolaunch_enabled": "Enabled: SteamVR will launch FramePilot VR when it starts",
   "event.framepilot_steamvr_autolaunch_disabled": "Disabled: SteamVR will no longer launch FramePilot VR",
-  "event.framepilot_steamvr_autolaunch_failed": "Unable to update the FramePilot VR SteamVR startup entry: {detail}"
+  "event.framepilot_steamvr_autolaunch_failed": "Unable to update the FramePilot VR SteamVR startup entry: {detail}",
+  "event.dashboard_visible": "SteamVR Dashboard is visible; adaptive resolution is paused",
+  "event.dashboard_status_unavailable": "SteamVR Dashboard status could not be read; adaptive resolution is paused",
+  "event.dashboard_recovering": "SteamVR Dashboard is hidden; waiting for a fresh statistics window and stable frame cadence",
+  "event.dashboard_recovered": "Statistics and frame cadence stabilized after the Dashboard transition; adaptive resolution resumed",
+  "event.runtime_message_translation_incomplete": "A runtime event could not be translated completely. See the application log for details."
 }
